@@ -91,14 +91,102 @@ if not param.print_verbose in [0,1]:
 if not param.show_verbose in [0,1]:
     raise ValueError("\x1B[31m" + "'show_verbose' should be in {'0','1'}" + "\x1B[0m")
 
+if not type(param.spectra_filter) is dict:
+    raise ValueError("\x1B[31m" + "'spectra_filter' should be a 'dict'" + "\x1B[0m")
+for key, value in param.spectra_filter.items():
+    if not key or not type(key) is str:
+        raise ValueError("\x1B[31m" + "'spectra_filter' keys should be un-empty 'str'" + "\x1B[0m")
+    if not type(value) is list:
+        raise ValueError("\x1B[31m" + "'spectra_filter' values should be 'list" + "\x1B[0m")
+    for entry in value:
+        if not type(entry) is tuple or not len(entry) == 2:
+            error_message = "'spectra_filter' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
+            error_message = "'spectra_filter' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+if not type(param.images_filter) is dict:
+    raise ValueError("\x1B[31m" + "'images_filter' should be a 'dict'" + "\x1B[0m")
+for key, value in param.images_filter.items():
+    if not key or not type(key) is str:
+        raise ValueError("\x1B[31m" + "'images_filter' keys should be un-empty 'str'" + "\x1B[0m")
+    if not type(value) is list:
+        raise ValueError("\x1B[31m" + "'images_filter' values should be 'list" + "\x1B[0m")
+    for entry in value:
+        if not type(entry) is tuple or not len(entry) == 2:
+            error_message = "'images_filter' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
+            error_message = "'images_filter' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+
+if not type(param.spectra_blocker) is dict:
+    raise ValueError("\x1B[31m" + "'spectra_blocker' should be a 'dict'" + "\x1B[0m")
+for key, value in param.spectra_blocker.items():
+    if not key or not type(key) is str:
+        raise ValueError("\x1B[31m" + "'spectra_blocker' keys should be un-empty 'str'" + "\x1B[0m")
+    if not type(value) is list:
+        raise ValueError("\x1B[31m" + "'spectra_blocker' values should be 'list" + "\x1B[0m")
+    for entry in value:
+        if not type(entry) is tuple or not len(entry) == 2:
+            error_message = "'spectra_blocker' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
+            error_message = "'spectra_blocker' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+if not type(param.images_blocker) is dict:
+    raise ValueError("\x1B[31m" + "'images_blocker' should be a 'dict'" + "\x1B[0m")
+for key, value in param.images_blocker.items():
+    if not key or not type(key) is str:
+        raise ValueError("\x1B[31m" + "'images_blocker' keys should be un-empty 'str'" + "\x1B[0m")
+    if not type(value) is list:
+        raise ValueError("\x1B[31m" + "'images_blocker' values should be 'list" + "\x1B[0m")
+    for entry in value:
+        if not type(entry) is tuple or not len(entry) == 2:
+            error_message = "'images_blocker' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
+            error_message = "'images_blocker' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+
 if not type(param.stellar_sigma) in (int, float):
     raise ValueError("\x1B[31m" + "'stellar_sigma' should be 'int/float'" + "\x1B[0m")
 
-if not type(param.hyperparameter) is list:
-    raise ValueError("\x1B[31m" + "'hyperparameter' should be a list" + "\x1B[0m")
-for entry in param.hyperparameter:
+if not type(param.stellar_mask) is dict:
+    raise ValueError("\x1B[31m" + "'stellar_mask' should be a 'dict'" + "\x1B[0m")
+for key, value in param.stellar_mask.items():
+    if not key or not type(key) is str:
+        raise ValueError("\x1B[31m" + "'stellar_mask' keys should be un-empty 'str'" + "\x1B[0m")
+    if not type(value) is list:
+        raise ValueError("\x1B[31m" + "'stellar_mask' values should be 'list" + "\x1B[0m")
+    for entry in value:
+        if not type(entry) is tuple or not len(entry) == 2:
+            error_message = "'stellar_mask' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
+            error_message = "'stellar_mask' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+
+if not type(param.psf_degrees) is list:
+    raise ValueError("\x1B[31m" + "'psf_degrees' should be a list" + "\x1B[0m")
+for entry in param.psf_degrees:
     if not type(entry) is int or not entry > 0:
-        raise ValueError("\x1B[31m" + "'hyperparameter' entries should be a 'int' > 0" + "\x1B[0m")
+        raise ValueError("\x1B[31m" + "'psf_degrees' entries should be a 'int' > 0" + "\x1B[0m")
+
+if not type(param.psf_mask) is dict:
+    raise ValueError("\x1B[31m" + "'psf_mask' should be a 'dict'" + "\x1B[0m")
+for key, value in param.psf_mask.items():
+    if not key or not type(key) is str:
+        raise ValueError("\x1B[31m" + "'psf_mask' keys should be un-empty 'str'" + "\x1B[0m")
+    if not type(value) is list:
+        raise ValueError("\x1B[31m" + "'psf_mask' values should be 'list" + "\x1B[0m")
+    for entry in value:
+        if not type(entry) is tuple or not len(entry) == 2:
+            error_message = "'psf_mask' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
+            error_message = "'psf_mask' values entries should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
 ################################################################################################### Data files opening
 
@@ -132,24 +220,6 @@ for input_path in expanded_input_paths:
             axis_names = wcs.axis_type_names
             axis_units = wcs.world_axis_units
 
-            # Compilation into a list of labels
-            axis_labels = list(zip(axis_names, axis_units))
-            
-            # Pixel values
-            # axis name and unit
-            if param.print_verbose:
-                try:
-                    pixel_names = header['BTYPE']
-                except KeyError:
-                    pixel_names = "< name >"
-                try:
-                    pixel_units = header['BUNIT']
-                except KeyError:
-                    pixel_units = "< unit >"
-            
-                # Add to the list of labels
-                axis_labels = [(pixel_names, pixel_units)] + axis_labels
-
 ################################################################################################### Origin replacement
 
             # Default origin from the header
@@ -160,9 +230,8 @@ for input_path in expanded_input_paths:
             argmax_indexes_list = []
 
             # Origin coordinates replacement
+            # (ignoring the non-existent axes)
             for key, value in param.origin.items():
-
-                # Non-existent axis ignoring
                 if key not in axis_names: continue
 
                 # Replacement of the associated origin coordinate with 'int' values
@@ -195,15 +264,19 @@ for input_path in expanded_input_paths:
                     world_origin[axis_names.index(key)] = value
                     [array_origin] = np.array(wcs.world_to_array_index_values(*[[world_origin]]))
 
-                # Subsquent assignation to ensure that the final values are indeed 'argmax'
+                # Subsquent assignation of the 'argmax' values
+                # to ensure that the final values are indeed 'argmax'
                 # (despite the correlations with the potential following axes)
                 if value is param.argmax:
                     argmax_indexes_list.append(axis_names.index(key))
 
-            # Preliminary search for the minimum and maximum flux pixels if necessary only
+            # Preliminary search for the minimum and maximum flux pixels, if necessary only
             # (to avoid the redundancy of the same costly calculation with multiple 'argmax' uses)
             if argmax_indexes_list:
-                if param.print_verbose: print("    Search for the maximum flux pixel", end = '\r')
+                if param.print_verbose:
+                    print("    Search for the maximum flux pixel", end = '\r')
+
+                # Search for the maximum flux pixel
                 argmax_array = np.unravel_index(np.nanargmax(data), data.shape)[::-1]
             
                 # Origin coordinates replacement
@@ -221,11 +294,12 @@ for input_path in expanded_input_paths:
             slice_zooms = [slice(0, axis_len) for axis_len in wcs.pixel_shape]
 
             # Data zooming from the origin
+            # (ignoring the non-existent axes)
             for key, value in param.zooms.items():
-                lower_bound, upper_bound = value
-
-                # Non-existent axis ignoring
                 if key not in axis_names: continue
+
+                # Zoom lower and upper bounds
+                lower_bound, upper_bound = value
 
                 # Replacement of the associated zoom lower and upper bounds with 'int' values
                 if type(lower_bound) is int:
@@ -269,15 +343,15 @@ for input_path in expanded_input_paths:
             array_zooms[1] -= np.array(data.shape[::-1])
             array_bounds = list(zip(*array_zooms))
 
-            # Zoom validity checking (to avoid flat axes sources of errors)
+            # Zoom validity checking (to avoid errors caused by flat axes)
             for axis, (lower_bound, upper_bound) in enumerate(array_bounds):
-                if lower_bound > upper_bound: # Lower and upper bounds switch if necessary
+                if lower_bound > upper_bound: # Decreasing axis cases
                     lower_bound, upper_bound = upper_bound-1, lower_bound+1
                     array_bounds[axis] = (lower_bound, upper_bound)
                 if lower_bound > wcs.pixel_shape[axis]: # Overflow beyond the number of pixels
                     error_message = f"Lower bound too large for the '{axis_names[axis]}' axis"
                     raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-                if upper_bound < 0 : # Overflow towards the negative indexes
+                if upper_bound < 0 : # Overflow beyond the index zero origin of the array axes
                     error_message = f"Upper bound too small for the '{axis_names[axis]}' axis"
                     raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
@@ -285,8 +359,8 @@ for input_path in expanded_input_paths:
             for key, value in param.zooms.items():
                 if key not in axis_names: continue
                 list_array_zooms_key = list(array_bounds[axis_names.index(key)])
-                list_array_zooms_key[0] = max(0, list_array_zooms_key[0])
-                list_array_zooms_key[1] += 1 # For upper bounds inclusion
+                list_array_zooms_key[0] = max(0, list_array_zooms_key[0]) # For positive indexes
+                list_array_zooms_key[1] += 1 # To include the upper bounds in the zoom selection
                 slice_zooms[axis_names.index(key)] = slice(*list_array_zooms_key)
 
             # Data and WCS zooming
@@ -350,7 +424,7 @@ for input_path in expanded_input_paths:
                 # already determined for axes with the same correlations
                 if list(world_grids[axis][0]) == list(corr_axes): continue
 
-                # World grids determination from correlated axes only
+                # World grids determination from 'zoomed_wcs' and array grids of the correlated axes
                 needed_wcs = zoomed_wcs.sub(tuple(int(corr_axis) + 1 for corr_axis in corr_axes))
                 needed_grids = needed_wcs.array_index_to_world_values(*np.indices(corr_shapes))
 
@@ -377,10 +451,6 @@ for input_path in expanded_input_paths:
             # (with a transpose '.T' against the wcs-array reversed order)
             moved_data = np.moveaxis(zoomed_data.T, spectral_axis_index, -1)
             
-            # Move of the spectral axis to the last position for labels too
-            axis_labels.append(axis_labels[spectral_axis_index + 1])
-            axis_labels.pop(spectral_axis_index + 1)
-
             # Move of the spectral axis to the last position for grids too
             # (and associated correction of the grid axis indexes where needed)
             for axis_index in range(len(world_grids)):
@@ -392,6 +462,28 @@ for input_path in expanded_input_paths:
             world_grids.append(world_grids[spectral_axis_index])
             world_grids.pop(spectral_axis_index)
 
+            # Move of the spectral axis
+            # to the last position for axis names
+            axis_names.append(axis_names[spectral_axis_index])
+            axis_names.pop(spectral_axis_index)
+
+            # Move of the spectral axis
+            # to the last position for axis units
+            axis_units.append(axis_units[spectral_axis_index])
+            axis_units.pop(spectral_axis_index)
+
+            # Pixels axis
+            # name and unit
+            if param.show_verbose:
+                try:
+                    axis_names += [header['BTYPE']]
+                except KeyError:
+                    axis_names += ["Flux"]
+                try:
+                    axis_units += [header['BUNIT']]
+                except KeyError:
+                    axis_units += ["< u >"]
+            
             # Vectorization of the first (non-spectral) axes
             # Optimization by putting the features along the columns
             matricized_data = moved_data.reshape(-1, moved_data.shape[-1])
@@ -399,15 +491,16 @@ for input_path in expanded_input_paths:
 ################################################################################################### Main processing
 
             # Main processing from the observation matrix 'matricized_data'
-            processed_data = process.process(matricized_data, world_grids, axis_labels)
+            processed_data = process.process(matricized_data, world_grids, axis_names, axis_units)
 
 ################################################################################################### Data tensorization
 
             # Devectorization of the first (non-spectral) axes
             tensorized_data = processed_data.reshape(tuple(moved_data.shape))
 
-            # Move of the spectral axis to its original position
-            data = np.moveaxis(tensorized_data, -1, spectral_axis_index)
+            # Move of the spectral axis to its original pre-move position
+            # (with a transpose '.T' against the wcs-array reversed order)
+            data = np.moveaxis(tensorized_data.T, -1, spectral_axis_index)
 
 ################################################################################################### Output saving
 

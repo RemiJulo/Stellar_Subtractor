@@ -1,65 +1,64 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+from astropy import units as u
+
 import param
 
 ################################################################################################### Algorithm
 
-def process(data, world_grids, axis_labels):
+def process(data: np.ndarray, world_grids:list, axis_names:list, axis_units:list) -> np.ndarray:
     """ Stellar Subtraction methods - shared architecture
     ---
     """
 
-    # Data recall
+    # DATA SAVE
 
     if param.show_verbose:
         
-        (pixels_axis_name, pixels_axis_unit) = axis_labels[0]
-        pixels_axis_unit = pixels_axis_unit.replace('**', '^')
-        pixels_axis_unit = pixels_axis_unit.replace('(','{')
-        pixels_axis_unit = pixels_axis_unit.replace(')','}')
-        pixels_axis_unit = f"${pixels_axis_unit}$"
+        show_dematricized(data, world_grids,
+                          axis_names, axis_units,
+                          axis_names[-1], axis_units[-1],
+                          "Pre-processed data\n", 'plasma', 'b')
 
-        if pixels_axis_name == "< name >":
-            pixels_axis_name = "Flux"
-
-        show_dematricized(data, world_grids, axis_labels,
-                          "Flux", pixels_axis_unit,
-                          "Input data\n", 'plasma', 'b')
-
-    # Stellar spectrum estimation
+    # STELLAR SPECTRUM ESTIMATION
 
     if param.print_verbose:
         print("\x1B[1;35m" + "\nStellar spectrum estimation" + "\x1B[0m")
 
-    s_est, stellar_selection = stellar_spectrum_estimate(data)
+    D = estimation_masking(data.copy(), param.stellar_mask, axis_names, world_grids)
+
+    s_est, stellar_selection = stellar_spectrum_estimate(D)
 
     if param.show_verbose:
 
-        stellar_heart = data.copy()
-        nan_spaxels = np.full(data.shape[1], np.nan)
-        stellar_heart[~stellar_selection] = nan_spaxels
+        additional_stellar_mask = ~ stellar_selection
+        D[additional_stellar_mask] = np.full(D.shape[1], np.nan)
 
-        show_dematricized(stellar_heart, world_grids, axis_labels,
-                          "Flux", pixels_axis_unit,
-                          "Stellar spectrum estimates\n", 'magma', 'm')
+        show_dematricized(D, world_grids,
+                          axis_names, axis_units,
+                          axis_names[-1], axis_units[-1],
+                          "Stellar spectrum estimation\n", 'magma', 'm')
 
-    # Point Spread Function estimation
+    # POINT SPREAD FUNCTION ESTIMATION
 
     if param.print_verbose:
         print("\x1B[1;35m" + "\nPoint Spread Function estimation" + "\x1B[0m")
 
-    match len(param.hyperparameter):
-        case 0: psf_est = point_spread_function_estimate_S3(data, s_est, world_grids)
-        case 1: psf_est = point_spread_function_estimate_S4(data, s_est, world_grids)
-        case 2: psf_est = point_spread_function_estimate_S5(data, s_est, world_grids)
+    D = estimation_masking(data.copy(), param.psf_mask, axis_names, world_grids)
+
+    match len(param.psf_degrees):
+        case 0: psf_est = point_spread_function_estimate_S3(D, s_est, world_grids)
+        case 1: psf_est = point_spread_function_estimate_S4(D, s_est, world_grids)
+        case 2: psf_est = point_spread_function_estimate_S5(D, s_est, world_grids)
 
     if param.show_verbose:
-        show_dematricized(psf_est, world_grids, axis_labels,
-                          "Flux" + " ratio", "$cm^{-2}.angstrom^{-1}$",
-                          "PSF estimates\n", 'cividis', 'y')
+        show_dematricized(psf_est, world_grids,
+                          axis_names, axis_units,
+                          axis_names[-1] + " ratio", "no unit",
+                          "Point Spread Function estimation\n", 'cividis', 'y')
 
-    # Stellar component estimation
+    # STELLAR COMPONENT ESTIMATION
 
     if param.print_verbose:
         print("\x1B[1;35m" + "\nStellar component estimation" + "\x1B[0m")
@@ -67,48 +66,110 @@ def process(data, world_grids, axis_labels):
     S_est = stellar_component_estimate(psf_est, s_est)
 
     if param.show_verbose:
-        show_dematricized(S_est, world_grids, axis_labels,
-                          "Flux", pixels_axis_unit,
-                          "Stellar estimates\n", 'inferno', 'r')
+        show_dematricized(S_est, world_grids,
+                          axis_names, axis_units,
+                          axis_names[-1], axis_units[-1],
+                          "Stellar component estimation\n", 'inferno', 'r')
 
-    # Residuals estimation
+    # NOISE COMPONENT ESTIMATION
 
-    residual_component = data - S_est
+    E_est = data - S_est
 
     if param.show_verbose:
-        show_dematricized(residual_component, world_grids, axis_labels,
-                          "Flux", pixels_axis_unit,
-                          "Output residuals\n", 'viridis', 'c')
+        show_dematricized(E_est, world_grids,
+                          axis_names, axis_units,
+                          axis_names[-1], axis_units[-1],
+                          "Noise component estimation\n", 'viridis', 'c')
 
-    return residual_component
+    return E_est
+
+################################################################################################### Preparators
+
+def estimation_masking(data: np.ndarray, mask_dict:dict[str, list[tuple]],
+                       axis_names:list, world_grids:list) -> np.ndarray:
+    """ Misleading pixels masking
+    ---
+    """
+
+    dematricized_data = dematricization(data, world_grids)
+    pixels_to_be_masked = np.zeros_like(dematricized_data)
+
+    for axis_name, masks_bounds_list in mask_dict.items():
+        if axis_name not in axis_names: continue
+        axis_index = axis_names.index(axis_name)
+
+        non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
+        del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
+        axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
+
+        for lower_bound, upper_bound in masks_bounds_list:
+
+            if type(lower_bound) is float:
+                if axis_grid[0] < axis_grid[-1]: # In/decreasing axes cases
+                    lower_bound = np.searchsorted(axis_grid, lower_bound, side = 'right') - 1
+                else : lower_bound = np.searchsorted(-axis_grid, -lower_bound, side = 'left')
+            if type(upper_bound) is float:
+                if axis_grid[0] < axis_grid[-1]: # In/decreasing axes cases
+                    upper_bound = np.searchsorted(axis_grid, upper_bound, side = 'left')
+                else : upper_bound = np.searchsorted(-axis_grid, -upper_bound, side = 'right') - 1
+
+            if lower_bound > upper_bound: lower_bound, upper_bound = upper_bound, lower_bound
+
+            slicer = pixels_to_be_masked.ndim * [slice(None)]
+            slicer[axis_index] = slice(lower_bound, upper_bound)
+            pixels_to_be_masked[tuple(slicer)] += 1
+
+    masks_intersection = (pixels_to_be_masked == max(1, np.max(pixels_to_be_masked)))
+
+    dematricized_data[masks_intersection] = np.nan
+
+    data = dematricized_data.reshape(data.shape)
+
+    return data
+
+def dematricization(matricized_data: np.ndarray, world_grids:list):
+    """ Dematricization of matricized tensors
+    ---
+    """
+
+    pre_matricization_shape = np.full(len(world_grids), -1)
+    for axes_grid, grid in world_grids:
+        for indice_axe, axe in enumerate(axes_grid):
+            pre_matricization_shape[axe] = grid.shape[::-1][indice_axe]
+            
+    dematricized_data = matricized_data.reshape(pre_matricization_shape)
+
+    return dematricized_data
 
 ################################################################################################### Estimators
 
-def stellar_spectrum_estimate(data):
+def stellar_spectrum_estimate(D: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """ Stellar spectrum estimation
     ---
     """
 
     # Stellar positions selection
-    data_spectral_integration = np.nansum(data, axis = 1)
+    data_spectral_integration = np.nansum(D, axis = 1)
     noise_level = np.nanmax(data_spectral_integration) / param.stellar_sigma
     stellar_selection = noise_level <= data_spectral_integration
 
     # Stellar spectrum estimation
-    s_est = np.nansum(data[stellar_selection], axis = 0)
+    s_est = np.nansum(D[stellar_selection], axis = 0)
 
     return s_est, stellar_selection
 
-def point_spread_function_estimate_S3(data, s_est, world_grids):
+def point_spread_function_estimate_S3(D: np.ndarray, s_est: np.ndarray,
+                                      world_grids: list) -> np.ndarray:
     """ PSF estimation - version Stellar Spread Subtraction (S3)
     ---
     """
 
-    psf_est = data / s_est
+    psf_est = D / s_est
 
     return psf_est
 
-def point_spread_function_estimate_S4(data, s_est, world_grids):
+def point_spread_function_estimate_S4(D: np.ndarray, s_est: np.ndarray,
+                                      world_grids: list) -> np.ndarray:
     """ PSF estimation - version Stellar Spread Spectral Subtraction (S4)
     ---
     """
@@ -125,10 +186,10 @@ def point_spread_function_estimate_S4(data, s_est, world_grids):
     # Matrix of the Legendre polynomials
     # by following Bonnet's recursion formula
     # -> (n+1)Pn+1(x) = (2n+1)xPn(x) - nPn-1(x)
-    lower_dimension = param.hyperparameter[0] + 1
-    M = np.tile(legendre_grid, (lower_dimension, 1))
-    M[0] = 1 # Degree 0 Legendre polynomial
-    for i in range(2, lower_dimension):
+    lower_spectral_dimension = param.psf_degrees[0] + 1
+    M = np.tile(legendre_grid, (lower_spectral_dimension, 1))
+    M[0] = 1 # Degree 0 (total flux) Legendre polynomial
+    for i in range(2, lower_spectral_dimension):
         M[i] *= M[i-1] * (2 * i - 1) / i
         M[i] -= M[i-2] * (i - 1) / i
 
@@ -137,12 +198,15 @@ def point_spread_function_estimate_S4(data, s_est, world_grids):
     M_s_est = M * s_est
 
     # 'NaN' and '0' pixels of 's_est' masking
+    # Data 'D' matrix columns full of 'NaN' masking
     s_est_mask = ~ (np.isnan(s_est) | (s_est == 0))
+    all_nan_D_sheets = ~ np.all(np.isnan(D), axis = 0)
+    cols_masking = all_nan_D_sheets & s_est_mask
 
     # Scaling of the first row (regressor) to unit norm
     # so that it weights as the others in the regression
     # (it is 's_est' as the 1st legendre polynomial is 1)
-    regressor_0_norm = np.linalg.norm(s_est[s_est_mask])
+    regressor_0_norm = np.linalg.norm(s_est[cols_masking])
     M_s_est[0] /= regressor_0_norm
     M[0] /= regressor_0_norm
     # Orthogonalization of variation rows with the (first) total flux row
@@ -152,47 +216,47 @@ def point_spread_function_estimate_S4(data, s_est, world_grids):
     # and 'M_s_est[i].T.s_est-(M_s_est[i].T.s_est/s_est.T.s_est) s_est.T.s_est'
     # and 'M_s_est[i].T.s_est-M_s_est[i].T.s_est = 0' hence the orthogonality
     # 'M' is subtracted in a way it keeps the same relation with 'M_s_est'
-    colinearity = M_s_est[1:, s_est_mask] @ s_est[s_est_mask].T
-    normalization_s_est = s_est[s_est_mask] @ s_est[s_est_mask].T
+    colinearity = M_s_est[1:, cols_masking] @ s_est[cols_masking].T
+    normalization_s_est = s_est[cols_masking] @ s_est[cols_masking].T
     normalized_colinearity = colinearity / normalization_s_est
     M_s_est[1:] -= normalized_colinearity[:, None] * s_est
     M[1:] -= normalized_colinearity[:, None]
     # Scaling of all other rows (regressors) to unit norms
     # so that each one of them weight equally in the regression
-    regressors_norms = np.linalg.norm(M_s_est[1:, s_est_mask], axis = 1)
+    regressors_norms = np.linalg.norm(M_s_est[1:, cols_masking], axis = 1)
     M_s_est[1:] /= regressors_norms[:, None]
     M[1:] /= regressors_norms[:, None]
 
     # Matrix of orthogonal projection onto the column space of 'M_s_est'
     # 'M_s_est' is well conditionned as based on the Legendre polynomials
     # Orthogonality could also ease constraining based on physical priors
-    M_s_est_Gram_matrix = M_s_est[:, s_est_mask] @ M_s_est[:, s_est_mask].T
-    Pi_M_s_est = M_s_est[:, s_est_mask].T @ np.linalg.inv(M_s_est_Gram_matrix)
+    M_s_est_Gram_matrix = M_s_est[:, cols_masking] @ M_s_est[:, cols_masking].T
+    Pi_M_s_est = M_s_est[:, cols_masking].T @ np.linalg.inv(M_s_est_Gram_matrix)
 
     # Search for data spaxels full of 'NaN'
     # (for 'NaN' reseting after 'NaN' zeroing)
-    all_nan_data = np.all(np.isnan(data), axis = 1)
-    # 'NaN' data pixels zeroing
-    # (for the matrix product)
-    data[np.isnan(data)] = 0
+    all_nan_spaxels = np.all(np.isnan(D), axis = 1)
+    # 'NaN' pixels zeroing (for the matrix multiplication)
+    D[np.isnan(D)] = 0
     # Estimation of the polynomial coefficients
-    coeffs_est = data[:, s_est_mask] @ Pi_M_s_est
+    coeffs_est = D[:, cols_masking] @ Pi_M_s_est
     # Reset to 'NaN' of the data spaxels full of 'NaN'
-    coeffs_est[all_nan_data] = np.nan
+    coeffs_est[all_nan_spaxels] = np.nan
 
     # Estimation of the PSF
     psf_est = coeffs_est @ M
 
     return psf_est
 
-def point_spread_function_estimate_S5(data, s_est, world_grids):
+def point_spread_function_estimate_S5(D: np.ndarray, s_est: np.ndarray,
+                                      world_grids: list) -> np.ndarray:
     """ PSF estimation - version Stellar Spread S< private > Spectral Subtraction (S5)
     ---
     """
 
     raise NotImplementedError("\x1B[31m" + "\nPrivate S5 method at the moment" + "\x1B[0m")
 
-def stellar_component_estimate(psf_est, s_est):
+def stellar_component_estimate(psf_est: np.ndarray, s_est: np.ndarray) -> np.ndarray:
     """ Stellar component estimation
     ---
     """
@@ -203,24 +267,19 @@ def stellar_component_estimate(psf_est, s_est):
 
 ################################################################################################### Shows
 
-def show_dematricized(matricized_data, world_grids, axis_labels,
-                      pixels_axis_name = "< pixels axis name >",
-                      pixels_axis_unit = "< pixels axis unit >",
-                      title = "", cmap = 'binary', color = 'k'):
+def show_dematricized(matricized_data: np.ndarray,
+                      world_grids:list, axis_names:list, axis_units:list,
+                      pixels_axis_name: str = "Flux",  pixels_axis_unit: str = "< u >",
+                      title: str = "", cmap: str = 'binary', color: str = 'k') -> None:
     """ Dematricized data - image and spectrum integrations shows
     ---
     """
-
-    # Pre-matricization shape recovery from world_grids
-    pre_matricization_shape = np.full(len(world_grids), -1)
-    for axes_grid, grid in world_grids:
-        for indice_axe, axe in enumerate(axes_grid):
-            pre_matricization_shape[axe] = grid.T.shape[indice_axe]
+    
     # Pre-matricization reconstruction from pre-matricization shape
-    dematricized_data = matricized_data.reshape(pre_matricization_shape)
+    dematricized_data = dematricization(matricized_data, world_grids)
 
     # Alert message for too large number of dimension
-    if param.print_verbose and len(pre_matricization_shape) > 3:
+    if param.print_verbose and dematricized_data.ndim > 3:
         alert_message = "Too large number of dimension for image display:"
         alert_message += "Truncation at the first two axes (excluding the spectral axis)"
         print("\x1B[33m" + '\n' + alert_message + '\n' + "\x1B[0m")
@@ -229,28 +288,39 @@ def show_dematricized(matricized_data, world_grids, axis_labels,
     # (averaging along correlated non-z axes)
     non_z_grid_axes = list(range(len(world_grids[-1][0])))
     del non_z_grid_axes[world_grids[-1][0].index(len(world_grids)-1)]
-    z_grid = np.nanmean(world_grids[-1][1].T, axis = tuple(non_z_grid_axes))
-
+    z_grid = np.mean(world_grids[-1][1].T, axis = tuple(non_z_grid_axes))
     # Image grid construction
     # (averaging along correlated non-x and non-y axes)
     non_x_grid_axes = list(range(len(world_grids[0][0])))
     del non_x_grid_axes[world_grids[0][0].index(0)]
+    x_grid = np.mean(world_grids[0][1].T, axis = tuple(non_x_grid_axes))
     non_y_grid_axes = list(range(len(world_grids[1][0])))
     del non_y_grid_axes[world_grids[1][0].index(1)]
-    x_grid = np.nanmean(world_grids[0][1].T, axis = tuple(non_x_grid_axes))
-    y_grid = np.nanmean(world_grids[1][1].T, axis = tuple(non_y_grid_axes))
+    y_grid = np.mean(world_grids[1][1].T, axis = tuple(non_y_grid_axes))
 
-    # Spectrum construction
-    non_z_axes = tuple(axis for axis in range(len(dematricized_data.shape)-1))
-    z_nan = np.all(np.isnan(dematricized_data), axis = tuple(non_z_axes))
-    spectrum_to_plot = np.nansum(dematricized_data, axis = non_z_axes)
-    spectrum_to_plot[z_nan] = np.nan # Erasure of fully 'NaN' sheets
-    
-    # Image construction
-    non_xy_axes = [axis for axis in range(2, len(dematricized_data.shape))]
-    xy_nan = np.all(np.isnan(dematricized_data), axis = tuple(non_xy_axes))
-    image_to_show = np.nansum(dematricized_data, axis = tuple(non_xy_axes))
-    image_to_show[xy_nan] = np.nan # Erasure of fully 'NaN' spaxels
+    # Filtering and blocking for spectra plots
+    dematricized_data_to_plot = filtering_and_blocking(dematricized_data.copy(),
+                                                       param.spectra_filter,
+                                                       param.spectra_blocker,
+                                                       axis_names, world_grids)
+    # Filtering and blocking for images shows
+    dematricized_data_to_show = filtering_and_blocking(dematricized_data.copy(),
+                                                       param.images_filter,
+                                                       param.images_blocker,
+                                                       axis_names, world_grids)
+
+    # Spectra construction
+    non_z_axes = tuple(axis for axis in range(dematricized_data.ndim -1))
+    z_nan = np.all(np.isnan(dematricized_data_to_plot), axis = non_z_axes)
+    dematricized_data_to_plot[..., z_nan] = 0 # To avoid 'nanmean' warnings
+    plot_spectrum = np.nanmean(dematricized_data_to_plot, axis = non_z_axes)
+    plot_spectrum[z_nan] = np.nan # Erasure of fully 'NaN' sheets
+    # Images construction
+    non_xy_axes = tuple(axis for axis in range(2, dematricized_data.ndim))
+    xy_nan = np.all(np.isnan(dematricized_data_to_show), axis = non_xy_axes)
+    dematricized_data_to_show[xy_nan, ...] = 0 # To avoid 'nanmean' warnings
+    pcolor_image = np.nanmean(dematricized_data_to_show, axis = non_xy_axes)
+    pcolor_image[xy_nan] = np.nan # Erasure of fully 'NaN' spaxels
 
     # Figure configuration
     plt.figure("Dematricized show")
@@ -261,43 +331,133 @@ def show_dematricized(matricized_data, world_grids, axis_labels,
     elif 'qt' in backend: manager.window.showMaximized()
     elif "wx" in backend: manager.frame.Maximize(True)
 
-    # Labels determination
-    (plot_xlabel_name, plot_xlabel_unit) = axis_labels[-1]
+    # World axes labels determination
+    plot_xlabel_name = axis_names[-2]
+    plot_xlabel_unit = axis_units[-2]
     if plot_xlabel_name in param.grids_units.keys():
         plot_xlabel_unit = param.grids_units[plot_xlabel_name]
-    (show_xlabel_name, show_xlabel_unit) = axis_labels[1]
+    show_xlabel_name = axis_names[0]
+    show_xlabel_unit = axis_units[0]
     if show_xlabel_name in param.grids_units.keys():
         show_xlabel_unit = param.grids_units[show_xlabel_name]
-    (show_ylabel_name, show_ylabel_unit) = axis_labels[2]
+    show_ylabel_name = axis_names[1]
+    show_ylabel_unit = axis_units[1]
     if show_ylabel_name in param.grids_units.keys():
         show_ylabel_unit = param.grids_units[show_ylabel_name]
-    if ".angstrom^{-1}" in pixels_axis_unit:
-        pixels_axis_unit_spectrum = pixels_axis_unit.replace(".angstrom^{-1}", "")
-    else : pixels_axis_unit_spectrum = "< unit >"
-    if "cm^{-2}." in pixels_axis_unit:
-        pixels_axis_unit_image = pixels_axis_unit.replace("cm^{-2}.", "")
-    else : pixels_axis_unit_image = "< unit >"
+    
+    # Pixels axis labels determination
+    try: pixels_axis_unit = u.Unit(pixels_axis_unit).to_string(format = "unicode")
+    except ValueError: pass # An unrecognized unit (as "without unit") is left as is
 
     # Spectrum to plot
     plt.subplot(1, 2, 1)
     plt.xticks(fontsize = 12)
     plt.yticks(fontsize = 12)
-    if z_grid[0] > z_grid[-1] : plt.gca().invert_xaxis()
-    plt.plot(z_grid, spectrum_to_plot, linewidth = 3, color = color)
+    if z_grid[0] > z_grid[-1]: plt.gca().invert_xaxis()
+    plt.plot(z_grid, plot_spectrum, linewidth = 3, color = color)
     plt.xlabel(f"{plot_xlabel_name} ({plot_xlabel_unit})", fontsize = 18)
-    plt.ylabel(f"{pixels_axis_name} ({pixels_axis_unit_spectrum})", fontsize = 18)
+    plt.ylabel(f"{pixels_axis_name} ({pixels_axis_unit})", fontsize = 18)
     # Image to show
     plt.subplot(1, 2, 2)
     plt.xticks(fontsize = 12)
     plt.yticks(fontsize = 12)
-    if x_grid[0] > x_grid[-1] : plt.gca().invert_xaxis()
-    if y_grid[0] > y_grid[-1] : plt.gca().invert_yaxis()
-    plt.pcolor(x_grid, y_grid, image_to_show.T, cmap = cmap)
+    if x_grid[0] > x_grid[-1]: plt.gca().invert_xaxis()
+    if y_grid[0] > y_grid[-1]: plt.gca().invert_yaxis()
+    plt.pcolor(x_grid, y_grid, pcolor_image.T, cmap = cmap)
     plt.xlabel(f"{show_xlabel_name} ({show_xlabel_unit})", fontsize = 18)
     plt.ylabel(f"{show_ylabel_name} ({show_ylabel_unit})", fontsize = 18)
     clrbar = plt.colorbar(fraction = 0.025, aspect = 50)
-    clrbar_label = f"{pixels_axis_name} ({pixels_axis_unit_image})"
+    clrbar_label = f"{pixels_axis_name} ({pixels_axis_unit})"
     clrbar.set_label(clrbar_label, fontsize = 18, rotation = 270, labelpad = 36)
 
     # Figure show
     plt.show()
+
+def filtering_and_blocking(dematricized_data: np.ndarray,
+                           filters: dict[str, list[tuple]],
+                           blockers: dict[str, list[tuple]],
+                           axis_names:list, world_grids: list) -> np.ndarray:
+    """ Filtering from Gaussians with height 1 and blocking from 1 - Gaussians with height 1
+    ---
+    """
+
+    # Gaussian with height 1
+
+    gaussian = lambda grid, loc, scale: np.exp(-1/2 * ((grid-loc) / scale)**2)
+ 
+    # Filters
+
+    filter = np.ones_like(dematricized_data)
+
+    for axis_name, filters_list in filters.items():
+        if axis_name not in axis_names: continue
+        axis_index = axis_names.index(axis_name)
+
+        non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
+        del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
+        axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
+
+        axis_filter = np.zeros_like(axis_grid)
+
+        for loc_filter, scale_filter in filters_list:
+
+            if type(loc_filter) is int:
+                loc_filter = axis_grid[loc_filter]
+            if type(scale_filter) is int:
+                if axis_grid[0] < axis_grid[-1]: # In/decreasing axes cases
+                    loc_filter_index = np.searchsorted(axis_grid, loc_filter)
+                else: loc_filter_index = np.searchsorted(axis_grid, loc_filter)
+                scale_filter_right = axis_grid[loc_filter_index + scale_filter]
+                scale_filter_left = axis_grid[loc_filter_index - scale_filter]
+                scale_filter = np.abs(scale_filter_right - scale_filter_left) / 2
+
+            axis_filter += gaussian(axis_grid, loc_filter, scale_filter)
+
+        shape = [1] * dematricized_data.ndim
+        shape[axis_index] = dematricized_data.shape[axis_index]
+
+        if axis_filter.any():
+            filter *= axis_filter.reshape(shape)
+
+    dematricized_data *= filter
+
+    # Blockers
+
+    reversed_blocker = np.ones_like(dematricized_data)
+
+    for axis_name, blockers_list in blockers.items():
+        if axis_name not in axis_names: continue
+        axis_index = axis_names.index(axis_name)
+
+        non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
+        del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
+        axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
+
+        axis_blocker = np.zeros_like(axis_grid)
+
+        for loc_blocker, scale_blocker in blockers_list:
+
+            if type(loc_blocker) is int:
+                loc_blocker = axis_filter[loc_blocker]
+            if type(scale_blocker) is int:
+                if axis_grid[0] < axis_grid[-1]: # In/decreasing axes cases
+                    loc_blocker_index = np.searchsorted(axis_grid, loc_blocker)
+                else: loc_blocker_index = np.searchsorted(axis_grid, loc_blocker)
+                scale_blocker_right = axis_blocker[loc_blocker_index + scale_blocker]
+                scale_blocker_left = axis_blocker[loc_blocker_index - scale_blocker]
+                scale_blocker = np.abs(scale_blocker_right - scale_blocker_left) / 2
+
+            axis_blocker += gaussian(axis_grid, loc_blocker, scale_blocker)
+
+        shape = [1] * dematricized_data.ndim
+        shape[axis_index] = dematricized_data.shape[axis_index]
+
+        if axis_blocker.any():
+            reversed_blocker *= axis_blocker.reshape(shape)
+
+    blocker = np.ones_like(reversed_blocker) - reversed_blocker
+
+    if blocker.any():
+        dematricized_data *= blocker
+
+    return dematricized_data
