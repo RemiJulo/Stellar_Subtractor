@@ -7,18 +7,25 @@ import param
 
 ################################################################################################### Algorithm
 
-def process(data: np.ndarray, world_grids:list, axis_names:list, axis_units:list) -> np.ndarray:
+def process(input_data: np.ndarray, world_grids: list,
+            spectral_axis: int, axis_names: list, axis_units: list) -> np.ndarray:
     """ Stellar Subtraction methods - shared architecture
     ---
     """
 
-    # DATA SAVE
+    # DATA MATRICIZATION
 
     if param.show_verbose:
-        
-        show_dematricized(data, world_grids,
-                          axis_names, axis_units,
-                          axis_names[-1], axis_units[-1],
+        pixels_axis_name = axis_names.pop()
+        pixels_axis_unit = axis_units.pop()
+
+    matricized = matricization(input_data, world_grids, spectral_axis, axis_names, axis_units)
+    data, pre_matricization_shape, world_grids, axis_names, axis_units = matricized
+
+    if param.show_verbose:
+        show_dematricized(data, pre_matricization_shape,
+                          pixels_axis_name, pixels_axis_unit,
+                          world_grids, axis_names, axis_units,
                           "Pre-processed data\n", 'plasma', 'b')
 
     # STELLAR SPECTRUM ESTIMATION
@@ -26,7 +33,8 @@ def process(data: np.ndarray, world_grids:list, axis_names:list, axis_units:list
     if param.print_verbose:
         print("\x1B[1;35m" + "\nStellar spectrum estimation" + "\x1B[0m")
 
-    D = estimation_masking(data.copy(), param.stellar_mask, axis_names, world_grids)
+    D = misleaders_masking(data.copy(), pre_matricization_shape,
+                           param.stellar_mask, axis_names, world_grids)
 
     s_est, stellar_selection = stellar_spectrum_estimate(D)
 
@@ -35,9 +43,9 @@ def process(data: np.ndarray, world_grids:list, axis_names:list, axis_units:list
         additional_stellar_mask = ~ stellar_selection
         D[additional_stellar_mask] = np.full(D.shape[1], np.nan)
 
-        show_dematricized(D, world_grids,
-                          axis_names, axis_units,
-                          axis_names[-1], axis_units[-1],
+        show_dematricized(D, pre_matricization_shape,
+                          pixels_axis_name, pixels_axis_unit,
+                          world_grids, axis_names, axis_units,
                           "Stellar spectrum estimation\n", 'magma', 'm')
 
     # POINT SPREAD FUNCTION ESTIMATION
@@ -45,7 +53,8 @@ def process(data: np.ndarray, world_grids:list, axis_names:list, axis_units:list
     if param.print_verbose:
         print("\x1B[1;35m" + "\nPoint Spread Function estimation" + "\x1B[0m")
 
-    D = estimation_masking(data.copy(), param.psf_mask, axis_names, world_grids)
+    D = misleaders_masking(data.copy(), pre_matricization_shape,
+                           param.psf_mask, axis_names, world_grids)
 
     match len(param.psf_degrees):
         case 0: psf_est = point_spread_function_estimate_S3(D, s_est, world_grids)
@@ -53,9 +62,9 @@ def process(data: np.ndarray, world_grids:list, axis_names:list, axis_units:list
         case 2: psf_est = point_spread_function_estimate_S5(D, s_est, world_grids)
 
     if param.show_verbose:
-        show_dematricized(psf_est, world_grids,
-                          axis_names, axis_units,
-                          axis_names[-1] + " ratio", "no unit",
+        show_dematricized(psf_est, pre_matricization_shape,
+                          pixels_axis_name + "ratio", "no unit",
+                          world_grids, axis_names, axis_units,
                           "Point Spread Function estimation\n", 'cividis', 'y')
 
     # STELLAR COMPONENT ESTIMATION
@@ -66,9 +75,9 @@ def process(data: np.ndarray, world_grids:list, axis_names:list, axis_units:list
     S_est = stellar_component_estimate(psf_est, s_est)
 
     if param.show_verbose:
-        show_dematricized(S_est, world_grids,
-                          axis_names, axis_units,
-                          axis_names[-1], axis_units[-1],
+        show_dematricized(S_est, pre_matricization_shape,
+                          pixels_axis_name, pixels_axis_unit,
+                          world_grids, axis_names, axis_units,
                           "Stellar component estimation\n", 'inferno', 'r')
 
     # NOISE COMPONENT ESTIMATION
@@ -76,22 +85,86 @@ def process(data: np.ndarray, world_grids:list, axis_names:list, axis_units:list
     E_est = data - S_est
 
     if param.show_verbose:
-        show_dematricized(E_est, world_grids,
-                          axis_names, axis_units,
-                          axis_names[-1], axis_units[-1],
+        show_dematricized(E_est, pre_matricization_shape,
+                          pixels_axis_name, pixels_axis_unit,
+                          world_grids, axis_names, axis_units,
                           "Noise component estimation\n", 'viridis', 'c')
 
-    return E_est
+    # DATA TENSORIZATION
+
+    output_data = tensorization(E_est, spectral_axis, pre_matricization_shape)
+
+    return output_data
+
+def matricization(data_tensor: np.ndarray, world_grids: list,
+                  spectral_axis: int, axis_names: list, axis_units: list) -> np.ndarray:
+    """ Data matricization with spectral observations along the rows and features along the columns
+    ---
+    """
+
+    # Move of the spectral axis to the last position
+    # Optimization by putting the observations along the rows
+    # (with a transpose '.T' against the wcs-array reversed order)
+    moved_data_tensor = np.moveaxis(data_tensor.T, spectral_axis, -1)
+    
+    # Move of the spectral axis to the last position for grids too
+    # (and associated correction of the grid axis indexes where needed)
+    for axis_index in range(len(world_grids)):
+        for corr_axis_index in range(len(world_grids[axis_index][0])):
+            if world_grids[axis_index][0][corr_axis_index] == spectral_axis:
+                world_grids[axis_index][0][corr_axis_index] = len(world_grids) - 1
+            elif world_grids[axis_index][0][corr_axis_index] > spectral_axis:
+                world_grids[axis_index][0][corr_axis_index] -= 1
+    world_grids.append(world_grids[spectral_axis])
+    world_grids.pop(spectral_axis)
+
+    # Move of the spectral axis
+    # to the last position for axis names
+    axis_names.append(axis_names[spectral_axis])
+    axis_names.pop(spectral_axis)
+
+    # Move of the spectral axis
+    # to the last position for axis units
+    axis_units.append(axis_units[spectral_axis])
+    axis_units.pop(spectral_axis)
+
+    # Pre-matricization shape save for tensorization
+    pre_matricization_shape = moved_data_tensor.shape
+
+    # Vectorization of the first (non-spectral) axes
+    # Optimization by putting the features along the columns
+    matricized_data = moved_data_tensor.reshape(-1, pre_matricization_shape[-1])
+
+    return matricized_data, pre_matricization_shape, world_grids, axis_names, axis_units
+
+def tensorization(data_matrix: np.ndarray, spectral_axis: int,
+                  pre_matricization_shape: tuple[int]) -> np.ndarray:
+    """ Data tensorization
+    ---
+    """
+
+    # Devectorization of the first (non-spectral) axes
+    tensorized_data = data_matrix.reshape(pre_matricization_shape)
+
+    # Move of the spectral axis to its original pre-move position
+    # (with a transpose '.T' against the wcs-array reversed order)
+    tensorized_data = np.moveaxis(tensorized_data.T, -1, spectral_axis)
+
+    return tensorized_data
 
 ################################################################################################### Preparators
 
-def estimation_masking(data: np.ndarray, mask_dict:dict[str, list[tuple]],
-                       axis_names:list, world_grids:list) -> np.ndarray:
+def misleaders_masking(matricized_data: np.ndarray,
+                       pre_matricization_shape: tuple[int],
+                       mask_dict: dict[str, list[tuple]],
+                       axis_names: list, world_grids: list) -> np.ndarray:
     """ Misleading pixels masking
     ---
     """
 
-    dematricized_data = dematricization(data, world_grids)
+    # Dematricization of the matricized data to its pre-matricization shape
+    dematricized_data = matricized_data.reshape(pre_matricization_shape)
+
     pixels_to_be_masked = np.zeros_like(dematricized_data)
 
     for axis_name, masks_bounds_list in mask_dict.items():
@@ -123,23 +196,9 @@ def estimation_masking(data: np.ndarray, mask_dict:dict[str, list[tuple]],
 
     dematricized_data[masks_intersection] = np.nan
 
-    data = dematricized_data.reshape(data.shape)
+    matricized_data = dematricized_data.reshape(matricized_data.shape)
 
-    return data
-
-def dematricization(matricized_data: np.ndarray, world_grids:list):
-    """ Dematricization of matricized tensors
-    ---
-    """
-
-    pre_matricization_shape = np.full(len(world_grids), -1)
-    for axes_grid, grid in world_grids:
-        for indice_axe, axe in enumerate(axes_grid):
-            pre_matricization_shape[axe] = grid.shape[::-1][indice_axe]
-            
-    dematricized_data = matricized_data.reshape(pre_matricization_shape)
-
-    return dematricized_data
+    return matricized_data
 
 ################################################################################################### Estimators
 
@@ -268,15 +327,16 @@ def stellar_component_estimate(psf_est: np.ndarray, s_est: np.ndarray) -> np.nda
 ################################################################################################### Shows
 
 def show_dematricized(matricized_data: np.ndarray,
-                      world_grids:list, axis_names:list, axis_units:list,
-                      pixels_axis_name: str = "Flux",  pixels_axis_unit: str = "< u >",
+                      pre_matricization_shape: tuple[int],
+                      pixels_axis_name: str, pixels_axis_unit: str,
+                      world_grids: list, axis_names: list, axis_units: list,
                       title: str = "", cmap: str = 'binary', color: str = 'k') -> None:
     """ Dematricized data - image and spectrum integrations shows
     ---
     """
     
-    # Pre-matricization reconstruction from pre-matricization shape
-    dematricized_data = dematricization(matricized_data, world_grids)
+    # Dematricization of the matricized data to its pre-matricization shape
+    dematricized_data = matricized_data.reshape(pre_matricization_shape)
 
     # Alert message for too large number of dimension
     if param.print_verbose and dematricized_data.ndim > 3:
@@ -332,8 +392,8 @@ def show_dematricized(matricized_data: np.ndarray,
     elif "wx" in backend: manager.frame.Maximize(True)
 
     # World axes labels determination
-    plot_xlabel_name = axis_names[-2]
-    plot_xlabel_unit = axis_units[-2]
+    plot_xlabel_name = axis_names[-1]
+    plot_xlabel_unit = axis_units[-1]
     if plot_xlabel_name in param.grids_units.keys():
         plot_xlabel_unit = param.grids_units[plot_xlabel_name]
     show_xlabel_name = axis_names[0]
@@ -363,9 +423,11 @@ def show_dematricized(matricized_data: np.ndarray,
     plt.yticks(fontsize = 12)
     if x_grid[0] > x_grid[-1]: plt.gca().invert_xaxis()
     if y_grid[0] > y_grid[-1]: plt.gca().invert_yaxis()
-    plt.pcolor(x_grid, y_grid, pcolor_image.T, cmap = cmap)
+    vmin = np.nanquantile(pcolor_image, param.vminmax_quantiles[0])
+    vmax = np.nanquantile(pcolor_image, param.vminmax_quantiles[1])
     plt.xlabel(f"{show_xlabel_name} ({show_xlabel_unit})", fontsize = 18)
     plt.ylabel(f"{show_ylabel_name} ({show_ylabel_unit})", fontsize = 18)
+    plt.pcolor(x_grid, y_grid, pcolor_image.T, vmin = vmin, vmax = vmax, cmap = cmap)
     clrbar = plt.colorbar(fraction = 0.025, aspect = 50)
     clrbar_label = f"{pixels_axis_name} ({pixels_axis_unit})"
     clrbar.set_label(clrbar_label, fontsize = 18, rotation = 270, labelpad = 36)
@@ -374,9 +436,9 @@ def show_dematricized(matricized_data: np.ndarray,
     plt.show()
 
 def filtering_and_blocking(dematricized_data: np.ndarray,
-                           filters: dict[str, list[tuple]],
-                           blockers: dict[str, list[tuple]],
-                           axis_names:list, world_grids: list) -> np.ndarray:
+                           filters: dict[str,list[tuple]],
+                           blockers: dict[str,list[tuple]],
+                           axis_names: list, world_grids: list) -> np.ndarray:
     """ Filtering from Gaussians with height 1 and blocking from 1 - Gaussians with height 1
     ---
     """

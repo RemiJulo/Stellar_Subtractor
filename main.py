@@ -28,13 +28,7 @@ start = time.time()
 
 expanded_input_paths = [] # To expand paths to folders in list of paths to files
 
-if not type(param.input_paths) is list:
-    raise ValueError("\x1B[31m" + "'input_paths' should be a list of 'str'" + "\x1B[0m")
-
 for input_path in param.input_paths:
-
-    if not type(input_path) is str:
-        raise ValueError("\x1B[31m" + "'input_paths' should be a list of 'str'" + "\x1B[0m")
 
     input_path = input_path.replace('/', sep).replace('\\', sep)
 
@@ -46,147 +40,6 @@ for input_path in param.input_paths:
             input_file_path = input_path + sep + input_file
             expanded_input_paths.append(input_file_path)
     else : expanded_input_paths.append(input_path)
-
-################################################################################################### Parameters checking
-
-if not param.output_path or not type(param.output_path) is str:
-    raise ValueError("\x1B[31m" + "'output_path' should be a un-empty 'str'" + "\x1B[0m")
-
-if not type(param.origin) is dict:
-    raise ValueError("\x1B[31m" + "'origin' should be a 'dict'" + "\x1B[0m")
-for key, value in param.origin.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'origin' keys should be un-empty 'str'" + "\x1B[0m")
-    if not value is param.argmax and not type(value) in (int, float):
-        raise ValueError("\x1B[31m" + "'origin' values should be 'int/float/arg'" + "\x1B[0m")
-if not type(param.origin_units) is dict:
-    raise ValueError("\x1B[31m" + "'origin_units' should be a 'dict'" + "\x1B[0m")
-for key, value in param.origin_units.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'origin_units' keys should be un-empty 'str'" + "\x1B[0m")
-    if not type(value) is str:
-        raise ValueError("\x1B[31m" + "'origin_units' values should be 'str'" + "\x1B[0m")
-
-if not type(param.zooms) is dict:
-    raise ValueError("\x1B[31m" + "'zooms' should be a 'dict'" + "\x1B[0m")
-for key, value in param.zooms.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'zooms' keys should be un-empty 'str'" + "\x1B[0m")
-    if not type(value) is tuple or not len(value) == 2:
-        raise ValueError("\x1B[31m" + "'zooms' values should be 'int/float'-doublets" + "\x1B[0m")
-    if not type(value[0]) in (int, float) or not type(value[1]) in (int, float):
-        raise ValueError("\x1B[31m" + "'zooms' values should be 'int/float'-doublets" + "\x1B[0m")
-if not type(param.zooms_units) is dict:
-    raise ValueError("\x1B[31m" + "'zooms_units' should be a 'dict'" + "\x1B[0m")
-for key, value in param.zooms_units.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'zooms_units' keys should be un-empty 'str'" + "\x1B[0m")
-    if not type(value) is str:
-        raise ValueError("\x1B[31m" + "'zooms_units' values should be 'str'" + "\x1B[0m")
-
-if not param.save_verbose in [0,1]:
-    raise ValueError("\x1B[31m" + "'save_verbose' should be in {'0','1'}" + "\x1B[0m")
-if not param.print_verbose in [0,1]:
-    raise ValueError("\x1B[31m" + "'print_verbose' should be in {'0','1'}" + "\x1B[0m")
-if not param.show_verbose in [0,1]:
-    raise ValueError("\x1B[31m" + "'show_verbose' should be in {'0','1'}" + "\x1B[0m")
-
-if not type(param.spectra_filter) is dict:
-    raise ValueError("\x1B[31m" + "'spectra_filter' should be a 'dict'" + "\x1B[0m")
-for key, value in param.spectra_filter.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'spectra_filter' keys should be un-empty 'str'" + "\x1B[0m")
-    if not type(value) is list:
-        raise ValueError("\x1B[31m" + "'spectra_filter' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not type(entry) is tuple or not len(entry) == 2:
-            error_message = "'spectra_filter' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
-            error_message = "'spectra_filter' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-if not type(param.images_filter) is dict:
-    raise ValueError("\x1B[31m" + "'images_filter' should be a 'dict'" + "\x1B[0m")
-for key, value in param.images_filter.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'images_filter' keys should be un-empty 'str'" + "\x1B[0m")
-    if not type(value) is list:
-        raise ValueError("\x1B[31m" + "'images_filter' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not type(entry) is tuple or not len(entry) == 2:
-            error_message = "'images_filter' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
-            error_message = "'images_filter' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-
-if not type(param.spectra_blocker) is dict:
-    raise ValueError("\x1B[31m" + "'spectra_blocker' should be a 'dict'" + "\x1B[0m")
-for key, value in param.spectra_blocker.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'spectra_blocker' keys should be un-empty 'str'" + "\x1B[0m")
-    if not type(value) is list:
-        raise ValueError("\x1B[31m" + "'spectra_blocker' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not type(entry) is tuple or not len(entry) == 2:
-            error_message = "'spectra_blocker' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
-            error_message = "'spectra_blocker' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-if not type(param.images_blocker) is dict:
-    raise ValueError("\x1B[31m" + "'images_blocker' should be a 'dict'" + "\x1B[0m")
-for key, value in param.images_blocker.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'images_blocker' keys should be un-empty 'str'" + "\x1B[0m")
-    if not type(value) is list:
-        raise ValueError("\x1B[31m" + "'images_blocker' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not type(entry) is tuple or not len(entry) == 2:
-            error_message = "'images_blocker' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
-            error_message = "'images_blocker' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-
-if not type(param.stellar_sigma) in (int, float):
-    raise ValueError("\x1B[31m" + "'stellar_sigma' should be 'int/float'" + "\x1B[0m")
-
-if not type(param.stellar_mask) is dict:
-    raise ValueError("\x1B[31m" + "'stellar_mask' should be a 'dict'" + "\x1B[0m")
-for key, value in param.stellar_mask.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'stellar_mask' keys should be un-empty 'str'" + "\x1B[0m")
-    if not type(value) is list:
-        raise ValueError("\x1B[31m" + "'stellar_mask' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not type(entry) is tuple or not len(entry) == 2:
-            error_message = "'stellar_mask' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
-            error_message = "'stellar_mask' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-
-if not type(param.psf_degrees) is list:
-    raise ValueError("\x1B[31m" + "'psf_degrees' should be a list" + "\x1B[0m")
-for entry in param.psf_degrees:
-    if not type(entry) is int or not entry > 0:
-        raise ValueError("\x1B[31m" + "'psf_degrees' entries should be a 'int' > 0" + "\x1B[0m")
-
-if not type(param.psf_mask) is dict:
-    raise ValueError("\x1B[31m" + "'psf_mask' should be a 'dict'" + "\x1B[0m")
-for key, value in param.psf_mask.items():
-    if not key or not type(key) is str:
-        raise ValueError("\x1B[31m" + "'psf_mask' keys should be un-empty 'str'" + "\x1B[0m")
-    if not type(value) is list:
-        raise ValueError("\x1B[31m" + "'psf_mask' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not type(entry) is tuple or not len(entry) == 2:
-            error_message = "'psf_mask' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not type(entry[0]) in (int, float) or not type(entry[1]) in (int, float):
-            error_message = "'psf_mask' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
 ################################################################################################### Data files opening
 
@@ -203,7 +56,7 @@ for input_path in expanded_input_paths:
     for hdu in hdul:
         data, header = hdu.data, hdu.header
 
-################################################################################################### Input preparing
+################################################################################################### Inputs preparing
 
         # WCS stands for 'World Coordinate System'
         if type(data) is np.ndarray:
@@ -214,12 +67,24 @@ for input_path in expanded_input_paths:
 
             # Existence and uniqueness of 1 spectral axis
             if coordinate_types.count('spectral') != 1: break
-            spectral_axis_index = coordinate_types.index('spectral')
+            spectral_axis = coordinate_types.index('spectral')
 
             # Axes names and units
             axis_names = wcs.axis_type_names
             axis_units = wcs.world_axis_units
 
+            # Pixels axis
+            # name and unit
+            if param.show_verbose:
+                try:
+                    axis_names += [header['BTYPE']]
+                except KeyError:
+                    axis_names += ["Flux"]
+                try:
+                    axis_units += [header['BUNIT']]
+                except KeyError:
+                    axis_units += ["< u >"]
+            
 ################################################################################################### Origin replacement
 
             # Default origin from the header
@@ -444,65 +309,11 @@ for input_path in expanded_input_paths:
                             raise ValueError("\x1B[31m" + error_message + "\x1B[0m") from None
                     world_grids[corr_axis] = (list(corr_axes), needed_grid)
 
-################################################################################################### Data matricization
-            
-            # Move of the spectral axis to the last position
-            # Optimization by putting the observations along the rows
-            # (with a transpose '.T' against the wcs-array reversed order)
-            moved_data = np.moveaxis(zoomed_data.T, spectral_axis_index, -1)
-            
-            # Move of the spectral axis to the last position for grids too
-            # (and associated correction of the grid axis indexes where needed)
-            for axis_index in range(len(world_grids)):
-                for corr_axis_index in range(len(world_grids[axis_index][0])):
-                    if world_grids[axis_index][0][corr_axis_index] == spectral_axis_index:
-                        world_grids[axis_index][0][corr_axis_index] = len(world_grids) - 1
-                    elif world_grids[axis_index][0][corr_axis_index] > spectral_axis_index:
-                        world_grids[axis_index][0][corr_axis_index] -= 1
-            world_grids.append(world_grids[spectral_axis_index])
-            world_grids.pop(spectral_axis_index)
-
-            # Move of the spectral axis
-            # to the last position for axis names
-            axis_names.append(axis_names[spectral_axis_index])
-            axis_names.pop(spectral_axis_index)
-
-            # Move of the spectral axis
-            # to the last position for axis units
-            axis_units.append(axis_units[spectral_axis_index])
-            axis_units.pop(spectral_axis_index)
-
-            # Pixels axis
-            # name and unit
-            if param.show_verbose:
-                try:
-                    axis_names += [header['BTYPE']]
-                except KeyError:
-                    axis_names += ["Flux"]
-                try:
-                    axis_units += [header['BUNIT']]
-                except KeyError:
-                    axis_units += ["< u >"]
-            
-            # Vectorization of the first (non-spectral) axes
-            # Optimization by putting the features along the columns
-            matricized_data = moved_data.reshape(-1, moved_data.shape[-1])
-
 ################################################################################################### Main processing
 
-            # Main processing from the observation matrix 'matricized_data'
-            processed_data = process.process(matricized_data, world_grids, axis_names, axis_units)
+            data = process.process(zoomed_data, world_grids, spectral_axis, axis_names, axis_units)
 
-################################################################################################### Data tensorization
-
-            # Devectorization of the first (non-spectral) axes
-            tensorized_data = processed_data.reshape(tuple(moved_data.shape))
-
-            # Move of the spectral axis to its original pre-move position
-            # (with a transpose '.T' against the wcs-array reversed order)
-            data = np.moveaxis(tensorized_data.T, -1, spectral_axis_index)
-
-################################################################################################### Output saving
+################################################################################################### Outputs saving
 
         hdu.data, hdu.header = data, header
 
