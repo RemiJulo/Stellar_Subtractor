@@ -28,67 +28,80 @@ def process(input_data: np.ndarray, world_grids: list,
                           world_grids, axis_names, axis_units,
                           "Pre-processed data\n", 'plasma', 'b')
 
-    # STELLAR SPECTRUM ESTIMATION
+    # ESTIMATION LOOP
 
-    if param.print_verbose:
-        print("\x1B[1;35m" + "\nStellar spectrum estimation" + "\x1B[0m")
+    n_rows, n_cols = data.shape
+    covariances = (np.identity(n_cols), np.identity(n_rows))
 
-    D = misleaders_masking(data.copy(), pre_matricization_shape,
-                           param.stellar_mask, axis_names, world_grids)
+    for noise_loop in range(1 + param.noise_loopback):
 
-    s_est, stellar_selection = stellar_spectrum_estimate(D)
+        if param.print_verbose and param.noise_loopback:
+            print("\x1B[1;35m" + f"\nEstimation loop: {noise_loop + 1}" + "\x1B[0m")
 
-    if param.show_verbose:
+        # STELLAR SPECTRUM ESTIMATION
 
-        additional_stellar_mask = ~ stellar_selection
-        D[additional_stellar_mask] = np.full(D.shape[1], np.nan)
+        if param.print_verbose:
+            print("\x1B[1;35m" + "\n    Stellar spectrum estimation" + "\x1B[0m")
 
-        show_dematricized(D, pre_matricization_shape,
-                          pixels_axis_name, pixels_axis_unit,
-                          world_grids, axis_names, axis_units,
-                          "Stellar spectrum estimation\n", 'magma', 'm')
+        D = misleaders_masking(data.copy(), pre_matricization_shape,
+                            param.stellar_mask, axis_names, world_grids)
 
-    # POINT SPREAD FUNCTION ESTIMATION
+        s_est, stellar_selection = stellar_spectrum_estimate(D)
 
-    if param.print_verbose:
-        print("\x1B[1;35m" + "\nPoint Spread Function estimation" + "\x1B[0m")
+        if param.show_verbose:
 
-    D = misleaders_masking(data.copy(), pre_matricization_shape,
-                           param.psf_mask, axis_names, world_grids)
+            additional_stellar_mask = ~ stellar_selection
+            D[additional_stellar_mask] = np.full(D.shape[1], np.nan)
 
-    match len(param.psf_degrees):
-        case 0: psf_est = point_spread_function_estimate_S3(D, s_est, world_grids)
-        case 1: psf_est = point_spread_function_estimate_S4(D, s_est, world_grids)
-        case 2: psf_est = point_spread_function_estimate_S5(D, s_est, world_grids)
+            show_dematricized(D, pre_matricization_shape,
+                            pixels_axis_name, pixels_axis_unit,
+                            world_grids, axis_names, axis_units,
+                            "Stellar spectrum estimation\n", 'magma', 'm')
 
-    if param.show_verbose:
-        show_dematricized(psf_est, pre_matricization_shape,
-                          pixels_axis_name + "ratio", "no unit",
-                          world_grids, axis_names, axis_units,
-                          "Point Spread Function estimation\n", 'cividis', 'y')
+        # POINT SPREAD FUNCTION ESTIMATION
 
-    # STELLAR COMPONENT ESTIMATION
+        if param.print_verbose:
+            print("\x1B[1;35m" + "\n    Point Spread Function estimation" + "\x1B[0m")
 
-    if param.print_verbose:
-        print("\x1B[1;35m" + "\nStellar component estimation" + "\x1B[0m")
+        D = misleaders_masking(data.copy(), pre_matricization_shape,
+                            param.psf_mask, axis_names, world_grids)
 
-    S_est = stellar_component_estimate(psf_est, s_est)
+        match len(param.psf_degrees):
+            case 0: psf_est = point_spread_function_estimate_S3(D, s_est, covariances, world_grids)
+            case 1: psf_est = point_spread_function_estimate_S4(D, s_est, covariances, world_grids)
+            case 2: psf_est = point_spread_function_estimate_S5(D, s_est, covariances, world_grids)
 
-    if param.show_verbose:
-        show_dematricized(S_est, pre_matricization_shape,
-                          pixels_axis_name, pixels_axis_unit,
-                          world_grids, axis_names, axis_units,
-                          "Stellar component estimation\n", 'inferno', 'r')
+        if param.show_verbose:
+            show_dematricized(psf_est, pre_matricization_shape,
+                            pixels_axis_name + "ratio", "no unit",
+                            world_grids, axis_names, axis_units,
+                            "Point Spread Function estimation\n", 'cividis', 'y')
 
-    # NOISE COMPONENT ESTIMATION
+        # STELLAR COMPONENT ESTIMATION
 
-    E_est = data - S_est
+        if param.print_verbose:
+            print("\x1B[1;35m" + "\n    Stellar component estimation" + "\x1B[0m")
 
-    if param.show_verbose:
-        show_dematricized(E_est, pre_matricization_shape,
-                          pixels_axis_name, pixels_axis_unit,
-                          world_grids, axis_names, axis_units,
-                          "Noise component estimation\n", 'viridis', 'c')
+        S_est = stellar_component_estimate(psf_est, s_est)
+
+        if param.show_verbose:
+            show_dematricized(S_est, pre_matricization_shape,
+                            pixels_axis_name, pixels_axis_unit,
+                            world_grids, axis_names, axis_units,
+                            "Stellar component estimation\n", 'inferno', 'r')
+
+        # NOISE COMPONENT ESTIMATION
+
+        E_est = data - S_est
+
+        if param.show_verbose:
+            show_dematricized(E_est, pre_matricization_shape,
+                            pixels_axis_name, pixels_axis_unit,
+                            world_grids, axis_names, axis_units,
+                            "Noise component estimation\n", 'viridis', 'c')
+
+        if param.noise_loopback:
+            covariances = noise_covariances_estimate(E_est)
 
     # DATA TENSORIZATION
 
@@ -218,6 +231,7 @@ def stellar_spectrum_estimate(D: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return s_est, stellar_selection
 
 def point_spread_function_estimate_S3(D: np.ndarray, s_est: np.ndarray,
+                                      covariances: tuple[np.ndarray,np.ndarray],
                                       world_grids: list) -> np.ndarray:
     """ PSF estimation - version Stellar Spread Subtraction (S3)
     ---
@@ -228,6 +242,7 @@ def point_spread_function_estimate_S3(D: np.ndarray, s_est: np.ndarray,
     return psf_est
 
 def point_spread_function_estimate_S4(D: np.ndarray, s_est: np.ndarray,
+                                      covariances: tuple[np.ndarray,np.ndarray],
                                       world_grids: list) -> np.ndarray:
     """ PSF estimation - version Stellar Spread Spectral Subtraction (S4)
     ---
@@ -257,8 +272,8 @@ def point_spread_function_estimate_S4(D: np.ndarray, s_est: np.ndarray,
     M_s_est = M * s_est
 
     # 'NaN' and '0' pixels of 's_est' masking
-    # Data 'D' matrix columns full of 'NaN' masking
     s_est_mask = ~ (np.isnan(s_est) | (s_est == 0))
+    # Data 'D' matrix columns full of 'NaN' masking
     all_nan_D_sheets = ~ np.all(np.isnan(D), axis = 0)
     cols_masking = all_nan_D_sheets & s_est_mask
 
@@ -286,21 +301,26 @@ def point_spread_function_estimate_S4(D: np.ndarray, s_est: np.ndarray,
     M_s_est[1:] /= regressors_norms[:, None]
     M[1:] /= regressors_norms[:, None]
 
+    # Data 'D' matrix rows full of 'NaN' zeroing
+    all_nan_D_spaxels = np.all(np.isnan(D), axis = 1)
+    D[np.isnan(D)] = 0 # For the matrix multiplications
+    
+    # Precision matrix weighting
+    cols_masking &= ~ np.all(np.isnan(covariances[0]), axis = 0)
+    masked_row_covariance = covariances[0][cols_masking, :][:, cols_masking]
+    rows_precision_matrix = np.linalg.inv(masked_row_covariance)
+    M_s_est = M_s_est[:, cols_masking]
+
     # Matrix of orthogonal projection onto the column space of 'M_s_est'
     # 'M_s_est' is well conditionned as based on the Legendre polynomials
     # Orthogonality could also ease constraining based on physical priors
-    M_s_est_Gram_matrix = M_s_est[:, cols_masking] @ M_s_est[:, cols_masking].T
-    Pi_M_s_est = M_s_est[:, cols_masking].T @ np.linalg.inv(M_s_est_Gram_matrix)
+    M_s_est_Gram_matrix = M_s_est @ rows_precision_matrix @ M_s_est.T
+    Pi_M_s_est = M_s_est.T @ np.linalg.inv(M_s_est_Gram_matrix)
 
-    # Search for data spaxels full of 'NaN'
-    # (for 'NaN' reseting after 'NaN' zeroing)
-    all_nan_spaxels = np.all(np.isnan(D), axis = 1)
-    # 'NaN' pixels zeroing (for the matrix multiplication)
-    D[np.isnan(D)] = 0
-    # Estimation of the polynomial coefficients
-    coeffs_est = D[:, cols_masking] @ Pi_M_s_est
+    # Estimation of the Legendre polynomial coefficients of the data decomposition
+    coeffs_est = D[:, cols_masking] @ rows_precision_matrix @ Pi_M_s_est
     # Reset to 'NaN' of the data spaxels full of 'NaN'
-    coeffs_est[all_nan_spaxels] = np.nan
+    coeffs_est[all_nan_D_spaxels] = np.nan
 
     # Estimation of the PSF
     psf_est = coeffs_est @ M
@@ -308,6 +328,7 @@ def point_spread_function_estimate_S4(D: np.ndarray, s_est: np.ndarray,
     return psf_est
 
 def point_spread_function_estimate_S5(D: np.ndarray, s_est: np.ndarray,
+                                      covariances: tuple[np.ndarray,np.ndarray],
                                       world_grids: list) -> np.ndarray:
     """ PSF estimation - version Stellar Spread S< private > Spectral Subtraction (S5)
     ---
@@ -323,6 +344,25 @@ def stellar_component_estimate(psf_est: np.ndarray, s_est: np.ndarray) -> np.nda
     S_est = psf_est * s_est
 
     return S_est
+
+def noise_covariances_estimate(E_est: np.ndarray):
+    """ Rows and columns noise covariances matrices estimation
+    ---
+    """
+
+    n_rows, n_cols = E_est.shape
+
+    rows_noise_covariance = np.cov(E_est, rowvar = False)
+    cols_noise_covariance = np.cov(E_est, rowvar = True)
+
+    rows_noise_covariance *= (1 - param.rows_covariance_shrinkage)
+    rows_noise_covariance += param.rows_covariance_shrinkage * np.identity(n_cols)
+    cols_noise_covariance *= (1 - param.cols_covariance_shrinkage)
+    cols_noise_covariance += param.cols_covariance_shrinkage * np.identity(n_rows)
+
+    noise_covariances = (rows_noise_covariance, cols_noise_covariance)
+
+    return noise_covariances
 
 ################################################################################################### Shows
 
@@ -387,9 +427,14 @@ def show_dematricized(matricized_data: np.ndarray,
     plt.suptitle(title, fontsize = 24)
     # Fullscreen (depending on the graphics engine - backend - used by matplotlib)
     manager, backend = plt.get_current_fig_manager(), plt.get_backend().lower()
-    if 'tkagg' in backend: manager.window.state('zoomed')
+    if 'tkagg' in backend:
+        try: manager.window.state('zoomed')
+        except: manager.window.wm_state('zoomed')
     elif 'qt' in backend: manager.window.showMaximized()
     elif "wx" in backend: manager.frame.Maximize(True)
+    elif 'gtk' in backend: manager.window.maximize()
+    elif backend == 'macosx': pass
+    else: pass
 
     # World axes labels determination
     plot_xlabel_name = axis_names[-1]
@@ -423,11 +468,10 @@ def show_dematricized(matricized_data: np.ndarray,
     plt.yticks(fontsize = 12)
     if x_grid[0] > x_grid[-1]: plt.gca().invert_xaxis()
     if y_grid[0] > y_grid[-1]: plt.gca().invert_yaxis()
-    vmin = np.nanquantile(pcolor_image, param.vminmax_quantiles[0])
-    vmax = np.nanquantile(pcolor_image, param.vminmax_quantiles[1])
+    vmax = np.nanquantile(pcolor_image, param.vmax_quantile)
     plt.xlabel(f"{show_xlabel_name} ({show_xlabel_unit})", fontsize = 18)
     plt.ylabel(f"{show_ylabel_name} ({show_ylabel_unit})", fontsize = 18)
-    plt.pcolor(x_grid, y_grid, pcolor_image.T, vmin = vmin, vmax = vmax, cmap = cmap)
+    plt.pcolor(x_grid, y_grid, pcolor_image.T, vmin = 0, vmax = vmax, cmap = cmap)
     clrbar = plt.colorbar(fraction = 0.025, aspect = 50)
     clrbar_label = f"{pixels_axis_name} ({pixels_axis_unit})"
     clrbar.set_label(clrbar_label, fontsize = 18, rotation = 270, labelpad = 36)

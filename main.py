@@ -317,16 +317,18 @@ for input_path in expanded_input_paths:
 
         hdu.data, hdu.header = data, header
 
-    output_folders_sep = param.output_path.replace('/', sep).replace('\\', sep)
+    if param.save_verbose:
 
-    file_name = input_path.split(sep)[-1]
-    output_path = input_path[:-len(file_name)]
-    for output_folder in output_folders_sep.split(sep):
-        output_path = os.path.join(output_path, output_folder)
-        if not os.path.exists(output_path):
-            os.mkdir(output_path)
+        output_folders_sep = param.output_path.replace('/', sep).replace('\\', sep)
 
-    hdul.writeto(output_path + file_name, overwrite = True)
+        file_name = input_path.split(sep)[-1]
+        output_path = input_path[:-len(file_name)]
+        for output_folder in output_folders_sep.split(sep):
+            output_path = os.path.join(output_path, output_folder)
+            if not os.path.exists(output_path):
+                os.mkdir(output_path)
+
+        hdul.writeto(output_path + file_name, overwrite = True)
 
 ################################################################################################### Data files closing
 

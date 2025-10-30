@@ -53,11 +53,17 @@ origin_units = {
 
 zooms = {
     
-    'AWAV' : (6062.8,7062.8)
+    'RA' : (-0.5,0.5),
+    'DEC' : (-0.5,0.5),
+
+    'AWAV' : (6462.8,6662.8)
 
 }
 
 zooms_units = {
+
+    'RA' : 'arcsec',
+    'DEC' : 'arcsec',
 
     'AWAV' : 'Å'
 
@@ -86,7 +92,7 @@ grids_units = {
 # Too large values of 'stellar_sigma' lead to a selection of too many too noisy pixels in practice
 # (thus could lead to strange results in the following because of various numerical instabilities)
 
-stellar_sigma = 100
+stellar_sigma = 50
 
 ###################################################################################################
 # Misleading a priori in the form of a dictionary associating axis names with lists of doublets
@@ -118,6 +124,19 @@ psf_mask = {
 
 ###################################################################################################
 ###################################################################################################
+# Number of PSF estimation loopback (taking into account an increasingly better noise estimation)
+
+noise_loopback = 0
+
+###################################################################################################
+# Shrinkage of the covariance matrix estimation towards the identity matrix as a regularisation
+
+rows_covariance_shrinkage = 0
+
+cols_covariance_shrinkage = 0
+
+###################################################################################################
+###################################################################################################
 # 'save_verbose' for backup feedback saved in output directory ('0' / '1' for no / full display)
 # 'print_verbose' for textual feedback printed in the terminal ('0' / '1' for no / full display)
 # 'show_verbose' for visual feedback showed in .pyplot windows ('0' / '1' for no / full display)
@@ -129,10 +148,9 @@ print_verbose = 1
 show_verbose = 1
 
 ###################################################################################################
-# Saturation of the feedback images as quantiles of their pixel values (if show_verbose = 1)
-# Built as the doublet of the 'vmin' then 'vmax' saturation quantile
+# Saturation of the feedback images as quantile of their pixel values (if show_verbose = 1)
 
-vminmax_quantiles = (0.01,0.99)
+vmax_quantile = 0.99
 
 ###################################################################################################
 # Data filters for visual feedbacks (as products from Gaussians with height 1)
@@ -160,15 +178,13 @@ images_filter = {
 
 spectra_blocker = {
 
-    'RA' : [(0.0,0.25)],
-    'DEC' : [(0.0,0.25)],
+
 
 }
 
 images_blocker = {
 
-    'RA' : [(0.0,0.25)],
-    'DEC' : [(0.0,0.25)],
+
 
 }
 
@@ -255,6 +271,14 @@ for key, value in psf_mask.items():
             error_message = "'psf_mask' values entries should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
+if not type(noise_loopback) is int or not noise_loopback >= 0:
+    raise ValueError("\x1B[31m" + "'noise_loopback' should be a positive 'int'" + "\x1B[0m")
+
+if not type(rows_covariance_shrinkage) in (int,float) or not 0 <= rows_covariance_shrinkage <= 1:
+    raise ValueError("\x1B[31m" + "'rows_covariance_shrinkage' should be in [0,1]" + "\x1B[0m")
+if not type(cols_covariance_shrinkage) in (int,float) or not 0 <= cols_covariance_shrinkage <= 1:
+    raise ValueError("\x1B[31m" + "'cols_covariance_shrinkage' should be in [0,1]" + "\x1B[0m")
+
 if not save_verbose in [0,1]:
     raise ValueError("\x1B[31m" + "'save_verbose' should be in {'0','1'}" + "\x1B[0m")
 if not print_verbose in [0,1]:
@@ -262,10 +286,8 @@ if not print_verbose in [0,1]:
 if not show_verbose in [0,1]:
     raise ValueError("\x1B[31m" + "'show_verbose' should be in {'0','1'}" + "\x1B[0m")
 
-if not type(vminmax_quantiles) is tuple and not len(vminmax_quantiles) == 2:
-    raise ValueError("\x1B[31m" + "'vminmax_quantiles' should be a doublet" + "\x1B[0m")
-if not type(vminmax_quantiles[0]) in (int,float) and not type(vminmax_quantiles[1]) in (int,float):
-    raise ValueError("\x1B[31m" + "'vminmax_quantiles' entries should be 'int/float'" + "\x1B[0m")
+if not type(vmax_quantile) in (int,float):
+    raise ValueError("\x1B[31m" + "'vmax_quantile' should be an 'int/float'" + "\x1B[0m")
 
 if not type(spectra_filter) is dict:
     raise ValueError("\x1B[31m" + "'spectra_filter' should be a 'dict'" + "\x1B[0m")

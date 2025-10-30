@@ -53,7 +53,7 @@ Feel free to contact me with any question at `remi.julo@univ-grenoble-alpes.fr`
 5. Clean `param.py`
 
     [x] If the returns are still not satisfactory, go back to step 3  
-    [x] Else, put `save_verbose`, `print_verbose` and `show_verbose` to `0` to speed up processing
+    [x] Else, put `print_verbose` and `show_verbose` to `0` to speed up processing
 
 6. Reexecute `main.py` on the full-list of paths to .fits files (or to folders full of .fits files) to be processed
 
