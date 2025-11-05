@@ -1,14 +1,12 @@
 import os
 import time
-
 import warnings
 
 import numpy as np
 
+from astropy import units
 from astropy.io import fits
 from astropy.wcs import WCS
-
-from astropy import units as u
 
 import param
 import process
@@ -28,18 +26,25 @@ start = time.time()
 
 expanded_input_paths = [] # To expand paths to folders in list of paths to files
 
-for input_path in param.input_paths:
+for input_path in param.inputs_paths:
 
     input_path = input_path.replace('/', sep).replace('\\', sep)
 
     if not os.path.exists(input_path):
         raise FileNotFoundError("\x1B[31m" + input_path + "\x1B[0m")
 
-    if not '.' in input_path:
+    if os.path.isdir(input_path):
         for input_file in os.listdir(input_path):
             input_file_path = input_path + sep + input_file
             expanded_input_paths.append(input_file_path)
     else : expanded_input_paths.append(input_path)
+
+outputs_path = "" # To create any needed series of outputs folders
+
+for outputs_folder in param.outputs_path.replace('/', sep).replace('\\', sep).split(sep):
+    outputs_path = os.path.join(outputs_path, outputs_folder)
+    if outputs_path and not os.path.exists(outputs_path):
+        os.mkdir(outputs_path)
 
 ################################################################################################### Data files opening
 
@@ -54,12 +59,13 @@ for input_path in expanded_input_paths:
     hdul = fits.open(input_path)
 
     for hdu in hdul:
-        data, header = hdu.data, hdu.header
+        data = hdu.data
+        header = hdu.header
 
-################################################################################################### Inputs preparing
+################################################################################################### Labels extraction
 
         # WCS stands for 'World Coordinate System'
-        if type(data) is np.ndarray:
+        if isinstance(data, np.ndarray):
             wcs = WCS(header)
 
             # Axis coordinate types (among 'spectral', 'celestial', 'temporal', ...)
@@ -85,73 +91,71 @@ for input_path in expanded_input_paths:
                 except KeyError:
                     axis_units += ["< u >"]
             
-################################################################################################### Origin replacement
+################################################################################################### Origin relocation
 
             # Default origin from the header
             array_origin = np.rint(wcs.wcs.crpix-1).astype(int)
             world_origin = np.array(wcs.wcs.crval).astype(float)
             
-            # 'argmax' indexes save
-            argmax_indexes_list = []
+            # 'argmax' axes save
+            argmax_axes_list = []
 
             # Origin coordinates replacement
             # (ignoring the non-existent axes)
-            for key, value in param.origin.items():
-                if key not in axis_names: continue
+            for axis_name, origin in param.origin.items():
+                if axis_name not in axis_names: continue
+                axis_index = axis_names.index(axis_name)
 
                 # Replacement of the associated origin coordinate with 'int' values
                 # (and update of all other coordinates to deal with correlations between axes)
-                if type(value) is int:
-                    array_origin[axis_names.index(key)] = value
+                if isinstance(origin, int):
+                    array_origin[axis_index] = origin
                     [world_origin] = np.array(wcs.array_index_to_world_values(*[[array_origin]]))
-                    if key in param.origin_units.keys():
-                        irreducible_unit = u.Unit(axis_units[axis_names.index(key)])
+                    if axis_name in param.origin_units.keys():
+                        irreducible_unit = units.Unit(axis_units[axis_index])
                         try: # Unit conversion if possible
-                            target_unit = u.Unit(param.origin_units[key])
+                            target_unit = units.Unit(param.origin_units[axis_name])
                             world_origin = (world_origin * irreducible_unit).to(target_unit).value
-                        except (ValueError, u.UnitConversionError):
-                            error_message = f"Axis {key} unit should be in:\n"
+                        except (ValueError, units.UnitConversionError):
+                            error_message = f"Axis {axis_name} unit should be in:\n"
                             error_message += f"{irreducible_unit.find_equivalent_units()}"
                             raise ValueError("\x1B[31m" + error_message + "\x1B[0m") from None
                 
                 # Replacement of the associated origin coordinate with 'float' values
                 # (and update of all other coordinates to deal with correlations between axes)
-                if type(value) is float:
-                    if key in param.origin_units.keys():
-                        irreducible_unit = u.Unit(axis_units[axis_names.index(key)])
+                if isinstance(origin, float):
+                    if axis_name in param.origin_units.keys():
+                        irreducible_unit = units.Unit(axis_units[axis_index])
                         try: # Unit conversion if possible
-                            target_unit = u.Unit(param.origin_units[key])
-                            value = (value * target_unit).to(irreducible_unit).value
-                        except (ValueError, u.UnitConversionError):
-                            error_message = f"Axis {key} unit should be in:\n"
+                            target_unit = units.Unit(param.origin_units[axis_name])
+                            origin = (origin * target_unit).to(irreducible_unit).value
+                        except (ValueError, units.UnitConversionError):
+                            error_message = f"Axis {axis_name} unit should be in:\n"
                             error_message += f"{irreducible_unit.find_equivalent_units()}"
                             raise ValueError("\x1B[31m" + error_message + "\x1B[0m") from None
-                    world_origin[axis_names.index(key)] = value
+                    world_origin[axis_index] = origin
                     [array_origin] = np.array(wcs.world_to_array_index_values(*[[world_origin]]))
 
                 # Subsquent assignation of the 'argmax' values
                 # to ensure that the final values are indeed 'argmax'
                 # (despite the correlations with the potential following axes)
-                if value is param.argmax:
-                    argmax_indexes_list.append(axis_names.index(key))
+                if isinstance(origin, param.argmax):
+                    argmax_axes_list.append(axis_index)
 
             # Preliminary search for the minimum and maximum flux pixels, if necessary only
             # (to avoid the redundancy of the same costly calculation with multiple 'argmax' uses)
-            if argmax_indexes_list:
+            if argmax_axes_list:
                 if param.print_verbose:
                     print("    Search for the maximum flux pixel", end = '\r')
 
-                # Search for the maximum flux pixel
+                # Search for the brightest pixel and origin coordinates replacement
                 argmax_array = np.unravel_index(np.nanargmax(data), data.shape)[::-1]
-            
-                # Origin coordinates replacement
-                for index in argmax_indexes_list:
-                    array_origin[index] = argmax_array[index]
+                for axis in argmax_axes_list: array_origin[axis] = argmax_array[axis]
 
                 # Update of all other coordinates to deal with correlations between axes
                 [world_origin] = np.array(wcs.array_index_to_world_values(*[[array_origin]]))
 
-################################################################################################### Data zooming
+################################################################################################### Zoom selection
 
             # Slice, world and array zooms initialization
             array_zooms = np.array([[0]*len(data.shape[::-1]), list(data.shape[::-1])])
@@ -160,45 +164,44 @@ for input_path in expanded_input_paths:
 
             # Data zooming from the origin
             # (ignoring the non-existent axes)
-            for key, value in param.zooms.items():
-                if key not in axis_names: continue
+            for axis_name, bounds in param.zooms.items():
+                if axis_name not in axis_names: continue
+                axis_index = axis_names.index(axis_name)
 
                 # Zoom lower and upper bounds
-                lower_bound, upper_bound = value
+                lower_bound, upper_bound = bounds
 
                 # Replacement of the associated zoom lower and upper bounds with 'int' values
-                if type(lower_bound) is int:
-                    array_origin_key = array_origin[axis_names.index(key)]
-                    array_zooms[0][axis_names.index(key)] = array_origin_key + lower_bound
-                if type(upper_bound) is int:
-                    origin_key = array_origin[axis_names.index(key)]
-                    array_zooms[1][axis_names.index(key)] = array_origin_key + upper_bound
+                if isinstance(lower_bound, int):
+                    if lower_bound >= 0: array_zooms[0][axis_index] = lower_bound
+                    else : array_zooms[0][axis_index] = array_zooms[1][axis_index] + lower_bound
+                if isinstance(upper_bound, int):
+                    if upper_bound >= 0: array_zooms[1][axis_index] = upper_bound
+                    else : array_zooms[1][axis_index] = array_zooms[1][axis_index] + upper_bound
 
                 # Replacement of the associated zoom lower and upper bounds with 'float' values
-                if type(lower_bound) is float:
-                    if key in param.zooms_units.keys():
-                        irreducible_unit = u.Unit(axis_units[axis_names.index(key)])
+                if isinstance(lower_bound, float):
+                    if axis_name in param.zooms_units.keys():
+                        irreducible_unit = units.Unit(axis_units[axis_index])
                         try: # Unit conversion if possible
-                            target_unit = u.Unit(param.zooms_units[key])
+                            target_unit = units.Unit(param.zooms_units[axis_name])
                             lower_bound = (lower_bound * target_unit).to(irreducible_unit).value
-                        except (ValueError, u.UnitConversionError):
-                            error_message = f"Axis {key} unit should be in:\n"
+                        except (ValueError, units.UnitConversionError):
+                            error_message = f"Axis {axis_name} unit should be in:\n"
                             error_message += f"{irreducible_unit.find_equivalent_units()}"
                             raise ValueError("\x1B[31m" + error_message + "\x1B[0m") from None
-                    world_origin_key = world_origin[axis_names.index(key)]
-                    world_zooms[0][axis_names.index(key)] = world_origin_key + lower_bound
-                if type(upper_bound) is float:
-                    if key in param.zooms_units.keys():
-                        irreducible_unit = u.Unit(axis_units[axis_names.index(key)])
+                    world_zooms[0][axis_index] = world_origin[axis_index] + lower_bound
+                if isinstance(upper_bound, float):
+                    if axis_name in param.zooms_units.keys():
+                        irreducible_unit = units.Unit(axis_units[axis_index])
                         try: # Unit conversion if possible
-                            target_unit = u.Unit(param.zooms_units[key])
+                            target_unit = units.Unit(param.zooms_units[axis_name])
                             upper_bound = (upper_bound * target_unit).to(irreducible_unit).value
-                        except (ValueError, u.UnitConversionError):
-                            error_message = f"Axis {key} unit should be in:\n"
+                        except (ValueError, units.UnitConversionError):
+                            error_message = f"Axis {axis_name} unit should be in:\n"
                             error_message += f"{irreducible_unit.find_equivalent_units()}"
                             raise ValueError("\x1B[31m" + error_message + "\x1B[0m") from None
-                    world_origin_key = world_origin[axis_names.index(key)]
-                    world_zooms[1][axis_names.index(key)] = world_origin_key + upper_bound
+                    world_zooms[1][axis_index] = world_origin[axis_index] + upper_bound
 
             # Add of the world zooms to the array zooms
             # The data shape is also subtracted to the array zooms
@@ -208,32 +211,36 @@ for input_path in expanded_input_paths:
             array_zooms[1] -= np.array(data.shape[::-1])
             array_bounds = list(zip(*array_zooms))
 
-            # Zoom validity checking (to avoid errors caused by flat axes)
-            for axis, (lower_bound, upper_bound) in enumerate(array_bounds):
-                if lower_bound > upper_bound: # Decreasing axis cases
-                    lower_bound, upper_bound = upper_bound-1, lower_bound+1
-                    array_bounds[axis] = (lower_bound, upper_bound)
-                if lower_bound > wcs.pixel_shape[axis]: # Overflow beyond the number of pixels
-                    error_message = f"Lower bound too large for the '{axis_names[axis]}' axis"
+            # Zoom validity checking
+            # (to avoid errors caused by flat axes)
+            for axis_index, bounds in enumerate(array_bounds):
+                axis_name, (lower_bound, upper_bound) = axis_names[axis_index], bounds
+                if lower_bound > upper_bound: # Decreasing order axis cases
+                    lower_bound, upper_bound = upper_bound, lower_bound
+                    array_bounds[axis_index] = (lower_bound, upper_bound)
+                if lower_bound > wcs.pixel_shape[axis_index]: # Overflow beyond the pixels number
+                    error_message = f"Lower bound too large for the '{axis_name}' axis"
                     raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
                 if upper_bound < 0 : # Overflow beyond the index zero origin of the array axes
-                    error_message = f"Upper bound too small for the '{axis_names[axis]}' axis"
+                    error_message = f"Upper bound too small for the '{axis_name}' axis"
                     raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
             # Zoom arrays to slices conversion
-            for key, value in param.zooms.items():
-                if key not in axis_names: continue
-                list_array_zooms_key = list(array_bounds[axis_names.index(key)])
+            for axis_name, bounds in param.zooms.items():
+                if axis_name not in axis_names: continue
+                axis_index = axis_names.index(axis_name)
+                list_array_zooms_key = list(array_bounds[axis_index])
                 list_array_zooms_key[0] = max(0, list_array_zooms_key[0]) # For positive indexes
                 list_array_zooms_key[1] += 1 # To include the upper bounds in the zoom selection
-                slice_zooms[axis_names.index(key)] = slice(*list_array_zooms_key)
+                slice_zooms[axis_index] = slice(*list_array_zooms_key)
 
-            # Data and WCS zooming
+            # WCS, data and header zooming
             tuple_slice_zooms = tuple(slice_zooms)[::-1]
             zoomed_wcs = wcs.slice(tuple_slice_zooms)
             zoomed_data = data[tuple_slice_zooms]
-
-################################################################################################### Grids sum up
+            header = zoomed_wcs.to_header()
+            
+################################################################################################### Data sum up
 
             if param.print_verbose:
 
@@ -242,21 +249,21 @@ for input_path in expanded_input_paths:
 
                 axes_information = [axis_names, axis_units]
                 axes_information += [array_origin, world_origin]
-                axes_information += list(array_zooms) + list(world_min_max)
+                axes_information += array_zooms.tolist() + list(world_min_max)
 
                 i = zip(*tuple(axes_information)) # Information list for all axes
 
                 for name, unit, array_0, world_0, array_min, array_max, world_min, world_max in i:
 
                     if name in param.origin_units.keys():
-                        irreducible_unit = u.Unit(axis_units[axis_names.index(name)])
+                        irreducible_unit = units.Unit(axis_units[axis_names.index(name)])
                         try: # Unit conversion if possible
-                            unit = u.Unit(param.origin_units[name])
+                            unit = units.Unit(param.origin_units[name])
                             world_0 = (world_0 * irreducible_unit).to(unit).value
                             world_min = (world_min * irreducible_unit).to(unit).value
                             world_max = (world_max * irreducible_unit).to(unit).value
-                        except (ValueError, u.UnitConversionError):
-                            error_message = f"Axis {key} unit should be in:\n"
+                        except (ValueError, units.UnitConversionError):
+                            error_message = f"Axis {name} unit should be in:\n"
                             error_message += f"{irreducible_unit.find_equivalent_units()}"
                             raise ValueError("\x1B[31m" + error_message + "\x1B[0m") from None
 
@@ -285,11 +292,11 @@ for input_path in expanded_input_paths:
             world_grids = [[[], None]]*len(zoomed_data.shape[::-1])
             for axis, (corr_axes, corr_shapes) in enumerate(zip(needed_axes, needed_shapes)):
 
-                # Optimization by avoiding the calculation of grids
-                # already determined for axes with the same correlations
-                if list(world_grids[axis][0]) == list(corr_axes): continue
+                # Optimization by avoiding the calculation of the grids
+                # already determined for the axes with the same correlations
+                if world_grids[axis][0] == corr_axes.tolist(): continue
 
-                # World grids determination from 'zoomed_wcs' and array grids of the correlated axes
+                # World grids determination from 'zoomed_wcs' and the correlated axes array grids
                 needed_wcs = zoomed_wcs.sub(tuple(int(corr_axis) + 1 for corr_axis in corr_axes))
                 needed_grids = needed_wcs.array_index_to_world_values(*np.indices(corr_shapes))
 
@@ -297,38 +304,29 @@ for input_path in expanded_input_paths:
                 # as well as of the grids for the correlated axes
                 # (generally without additional correlations with other axes)
                 for corr_axis, needed_grid in zip(corr_axes, np.atleast_2d(needed_grids)):
-                    needed_grid -= world_origin[corr_axis] # Shift to the origin
-                    if axis_names[corr_axis] in param.grids_units.keys():
-                        irreducible_unit = u.Unit(axis_units[corr_axis])
+                    needed_grid -= world_origin[corr_axis] # Shift to the origin coordinate
+                    if axis_names[corr_axis] in param.zooms_units.keys():
+                        irreducible_unit = units.Unit(axis_units[corr_axis])
                         try: # Unit conversion if possible
-                            target_unit = u.Unit(param.grids_units[axis_names[corr_axis]])
+                            target_unit = units.Unit(param.zooms_units[axis_names[corr_axis]])
                             needed_grid = (needed_grid * irreducible_unit).to(target_unit).value
-                        except (ValueError, u.UnitConversionError):
-                            error_message = f"Axis {key} unit should be in:\n"
+                        except (ValueError, units.UnitConversionError):
+                            error_message = f"Axis {axis_names[corr_axis]} unit should be in:\n"
                             error_message += f"{irreducible_unit.find_equivalent_units()}"
                             raise ValueError("\x1B[31m" + error_message + "\x1B[0m") from None
-                    world_grids[corr_axis] = (list(corr_axes), needed_grid)
+                    world_grids[corr_axis] = (corr_axes.tolist(), needed_grid)
 
 ################################################################################################### Main processing
 
-            data = process.process(zoomed_data, world_grids, spectral_axis, axis_names, axis_units)
+            data = process.process(zoomed_data, spectral_axis, world_grids, axis_names, axis_units)
 
 ################################################################################################### Outputs saving
 
-        hdu.data, hdu.header = data, header
-
+            hdu.header.update(header)
+            hdu.data = data
+    
     if param.save_verbose:
-
-        output_folders_sep = param.output_path.replace('/', sep).replace('\\', sep)
-
-        file_name = input_path.split(sep)[-1]
-        output_path = input_path[:-len(file_name)]
-        for output_folder in output_folders_sep.split(sep):
-            output_path = os.path.join(output_path, output_folder)
-            if not os.path.exists(output_path):
-                os.mkdir(output_path)
-
-        hdul.writeto(output_path + file_name, overwrite = True)
+        hdul.writeto(outputs_path + input_path.split(sep)[-1], overwrite = True)
 
 ################################################################################################### Data files closing
 

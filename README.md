@@ -5,17 +5,21 @@
 ### Prerequisites
 
 The following libraries must be installed:
-- `numpy`
-- `astropy`
-- `matplotlib`
+- `numpy` v.2.3.3
+- `astropy` v.7.1.0
+- `matplotlib` v.3.10.6
 
-This project is currently developed with Python 3.12.11.
+This project is currently developed with Python 3.12.10.
 
 ### List of files
 
-- `main.py` is the only file to execute
-- `param.py` is the only file to modify
-- `process.py` is the only process file
+- `process.py` is the only file with the algorithms
+- `param.py` is the only file with values to modify
+- `main.py` is the only file with a code to execute
+
+The `process.py` file is designed to be specific to the *method*  
+The `param.py` file is designed to be specific to the *account*  
+The `main.py` file is designed to be specific to the *project*
 
 ### Documentation
 
@@ -24,7 +28,7 @@ https://arxiv.org/pdf/2509.09878
 
 ### Contact
 
-Feel free to contact me with any question at `remi.julo@univ-grenoble-alpes.fr`
+Feel free to contact me at `remi.julo@univ-grenoble-alpes.fr`
 
 ### Much more to come!
 
@@ -60,6 +64,16 @@ Feel free to contact me with any question at `remi.julo@univ-grenoble-alpes.fr`
     [x] Same as 2. and 4.  
     [x] Open `output_path`  
     [x] Enjoy your post-processing 😎
+
+## > Step-by-step guides
+
+### The detection of PDS 70 b and c with the MUSE instrument
+
+Upcoming...
+
+### The characterization of YSES 1 b with the UVES instrument
+
+Upcoming...
 
 ## > Advanced parameters
 
