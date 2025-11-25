@@ -11,24 +11,24 @@ import param
 ###################################################################################################
 
 type float_arr_type = np.typing.NDArray[np.float64]
-type mask_type = dict[str, list[tuple[int | float, int | float]]]
+type mask_type = list[dict[str, tuple[int | float, int | float]]]
 type tuple_float_arr_type = tuple[float_arr_type, float_arr_type]
 
 ################################################################################################### General algorithm
 
-def process(data_tensor: float_arr_type, spectral_axis: int,
-            world_grids: list[tuple[list[int], float_arr_type]],
-            axis_names: list[str], axis_units: list[str]) -> float_arr_type:
-    """ Stellar Subtraction (S2) methods - General algorithm
+def process(data_tensor: float_arr_type,
+            axis_names: list[str], axis_units: list[str],
+            world_grids: list[tuple[list[int], float_arr_type]]) -> float_arr_type:
+    """ Stellar Subtraction - General algorithm
     ---
 
-    Shared structure for the different stellar subtraction methods:
+    General algorithm for the stellar subtraction method:
 
     - Outliers detection (for their disregard in the following processing)
     - Data matricization (with observations along the rows and features along the columns)
     - Start of the estimation loop (with increasingly better noise estimates)
         - Stellar spectrum estimation (by averaging a selection of the least noisy pixels)
-        - Point Spread Function estimation (with the S3, S4 or S5 method)
+        - Point Spread Function estimation (by decomposition on the Legendre basis)
         - Stellar component estimation (from the stellar spectrum and PSF estimates)
         - Noise component estimation (with covariances matrices estimations)
     - End of the estimation loop (in practice, after two or even just one iteration)
@@ -37,37 +37,41 @@ def process(data_tensor: float_arr_type, spectral_axis: int,
     
     Args:
         data_tensor (np.typing.NDArray[np.float64]):
-            Data tensor from which to subtract the stellar component
-        spectral_axis (int):
-            Index of the spectral axis on which both the S4 and the S5 methods are based
+            Data tensor from which to subtract the stellar component \\
+            The last axis of this tensor must be its (only) spectral axis
         world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
             Grids of the world (physical) values of the different axis, \\
             grouped by correlated axes so that each tuple contains a list of axis indexes \\
             followed by the grid of the corresponding axes, in the same access order
         axis_names (list[str]):
-            Names of the different axes as extracted in the data header
+            Names of the different axes as extracted in the data header \\
+            The spectral axis entry must be the panultimate one \\
+            (the pixel axis entry being the ultimate one)
         axis_units (list[str]):
             Units of the different axes as extracted in the data header \\
-            or as choosen in `param.zooms_units`
+            The spectral axis entry must be the panultimate one \\
+            (the pixel axis entry being the ultimate one)
 
     Returns:
         data_tensor (np.typing.NDArray[np.float64]):
             Data tensor from which an estimate of the stellar component has been subtracted
     """
 
+    pixels_axis_name = axis_names.pop() # The pixels axis name and unit are added just
+    pixels_axis_unit = axis_units.pop() # at the end of the axis names and units lists
+
     # Outliers detection
 
-    data_tensor[outliers_pixels_estimate(data_tensor, axis_names, world_grids)] = np.nan
+    outliers = outliers_pixels_estimate(data_tensor, axis_names, world_grids,
+                                        param.outliers_sigmas, param.outliers_mask)
+    data_tensor[outliers] = np.nan
 
-    # Data matricization
+    # Data tensor matricization via
+    # vectorization of the first axes
+    
+    data_tensor_shape = data_tensor.shape
 
-    tensor_args = locals() # Tensor data args for transformation into matrix data args
-
-    if param.show_verbose:
-        pixels_axis_name = axis_names.pop() # The pixels axis name and unit is added just
-        pixels_axis_unit = axis_units.pop() # at the end of the axis names and units lists
-
-    data, data_tensor_shape = matricization(**tensor_args)
+    data = data_tensor.reshape(-1, data_tensor_shape[-1])
 
     if param.show_verbose:
         show_dematricized(data.reshape(data_tensor_shape),
@@ -107,17 +111,25 @@ def process(data_tensor: float_arr_type, spectral_axis: int,
 
         D = masking_tool(data.reshape(data_tensor_shape).copy(), axis_names,
                          world_grids, param.psf_mask).reshape(data.shape)
+        
+        if param.show_verbose:
 
-        match len(param.psf_degrees):
-            case 0: psf_est = point_spread_function_estimate_S3(D, s_est, world_grids, covariances)
-            case 1: psf_est = point_spread_function_estimate_S4(D, s_est, world_grids, covariances)
-            case 2: psf_est = point_spread_function_estimate_S5(D, s_est, world_grids, covariances)
+            out = np.full_like(D, np.nan) # Default 'psf_est' value
+            where = (s_est != 0) & ~ np.isnan(s_est) # Divisibility
+            psf_est = np.divide(D, s_est, where = where, out = out)
+
+            show_dematricized(psf_est.reshape(data_tensor_shape),
+                              pixels_axis_name + " ratio", "no unit",
+                              axis_names, axis_units, world_grids,
+                              "Raw Point Spread Function estimation\n", 'y', 'cividis')
+
+        psf_est = point_spread_function_estimate(D, s_est, world_grids, covariances)
 
         if param.show_verbose:
             show_dematricized(psf_est.reshape(data_tensor_shape),
-                              pixels_axis_name + "ratio", "no unit",
+                              pixels_axis_name + " ratio", "no unit",
                               axis_names, axis_units, world_grids,
-                              "Point Spread Function estimation\n", 'y', 'cividis')
+                              "Regularized Point Spread Function estimation\n", 'y', 'cividis')
 
         # Stellar component estimation
 
@@ -147,7 +159,7 @@ def process(data_tensor: float_arr_type, spectral_axis: int,
 
     # Anomalies detection
 
-    if param.show_verbose:
+    if param.show_verbose and param.anomalies_sigmas:
 
         anomalies_selection = E_est.reshape(data_tensor_shape).copy()
 
@@ -161,125 +173,19 @@ def process(data_tensor: float_arr_type, spectral_axis: int,
                           axis_names, axis_units, world_grids,
                           "Anomaly detection\n", 'g', 'viridis')
 
-    # Data tensorization
-
-    data_tensor = tensorization(E_est, spectral_axis, data_tensor_shape)
+    # Data matrix tensorization via
+    # devectorization of the first axes
+    
+    data_tensor = E_est.reshape(data_tensor.shape)
 
     return data_tensor
-
-def matricization(data_tensor: float_arr_type, spectral_axis: int,
-                  world_grids: list[tuple[list[int], float_arr_type]],
-                  axis_names: list[str], axis_units: list[str]) -> tuple[float_arr_type,
-                                                                         tuple[int]]:
-    """ Data matricization
-    ---
-
-    In this `process.py`, the features are the spectral channels \\
-    while the observations are the various spaxels collected following any other type of axis
-
-    **Note:** The observations are set along the rows and the features are set along the columns \\
-    for optimization purposes (the observations/spaxels being used as a single block usually, \\
-    and therefore preferably contiguously - the exception being when using spectral masks)
-
-    Args:
-        data_tensor (np.typing.NDArray[np.float64]):
-            Data tensor from which to subtract the stellar component \\
-            and transform into a data matrix in this function
-        spectral_axis (int):
-            Index of the spectral axis on which both the S4 and the S5 methods are based
-        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
-            grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
-        axis_names (list[str]):
-            Names of the different axes as extracted in the data header
-        axis_units (list[str]):
-            Units of the different axes as extracted in the data header \\
-            or as choosen in `param.zooms_units`
-
-    Returns:
-        matricix_args (tuple[np.typing.NDArray[np.float64]]], tuple[int]]):
-        Matricized data with observations along the rows and features along the columns, \\
-        as well as pre-matricization (but post spectral axis move) shape of the tensor data \\
-        (importantly, this also modifies `world_grids`, `axis_names` and `axis_units`)
-    """
-
-    # Move of the spectral axis to the last position
-    # Optimization by putting the observations along the rows
-    # (with a transpose '.T' against the wcs-array reversed order)
-    moved_data_tensor = np.moveaxis(data_tensor.T, spectral_axis, -1)
-    
-    # Move of the spectral axis to the last position for grids too
-    # (and associated correction of the grid axis indexes where needed)
-    for axis_index in range(len(world_grids)):
-        for corr_axis_index in range(len(world_grids[axis_index][0])):
-            if world_grids[axis_index][0][corr_axis_index] == spectral_axis:
-                world_grids[axis_index][0][corr_axis_index] = len(world_grids) - 1
-            elif world_grids[axis_index][0][corr_axis_index] > spectral_axis:
-                world_grids[axis_index][0][corr_axis_index] -= 1
-    world_grids.append(world_grids[spectral_axis])
-    world_grids.pop(spectral_axis)
-
-    # Move of the spectral axis
-    # to the last position for axis names
-    axis_names.append(axis_names[spectral_axis])
-    axis_names.pop(spectral_axis)
-
-    # Move of the spectral axis
-    # to the last position for axis units
-    axis_units.append(axis_units[spectral_axis])
-    axis_units.pop(spectral_axis)
-
-    # Data tensor shape save for tensorization
-    data_tensor_shape = moved_data_tensor.shape
-
-    # Vectorization of the first (non-spectral) axes
-    # Optimization by putting the features along the columns
-    matricized_data = moved_data_tensor.reshape(-1, data_tensor_shape[-1])
-
-    # Matricized data and pre-matricization shape
-    matricix_args = matricized_data, data_tensor_shape
-
-    return matricix_args
-
-def tensorization(data_matrix: float_arr_type, spectral_axis: int,
-                  pre_matricization_shape: tuple[int]) -> float_arr_type:
-    """ Data tensorization
-    ---
-
-    Reshape of the matricized data to its original tensor shape \\
-    and with reposition of the spectral axis to its original position
-    
-    Args:
-        data_matrix (np.typing.NDArray[np.float64]):
-            Matricized data with observations along the rows and features along the columns \\
-            (following the processing previously done in the `matricization` function)
-        spectral_axis (int):
-            Original index of the spectral axis (where to move the last - features/spectral - axis)
-        pre_matricization_shape (tuple[int]):
-            Original shape of the input tensor data (how to reshape the matriced data)
-
-    Returns:
-        tensorized_data (np.typing.NDArray[np.float64]):
-            Tensorized data matrix to the original shape of the input tensor data \\
-            (with reposition of the spectral axis to its original position)
-    """
-
-    # Devectorization of the first (non-spectral) axes
-    pre_move_tensorized_data = data_matrix.reshape(pre_matricization_shape)
-
-    # Move of the spectral axis to its original position
-    # (with a transpose '.T' against the wcs-array reversed order)
-    tensorized_data = np.moveaxis(pre_move_tensorized_data.T, -1, spectral_axis)
-
-    return tensorized_data
 
 ################################################################################################### Estimators
 
 def outliers_pixels_estimate(data_tensor: float_arr_type, axis_names: list[str],
                              world_grids: list[tuple[list[int], float_arr_type]],
-                             standard_deviations: dict[str, int | float] = param.outliers_sigmas,
-                             mask: mask_type = param.outliers_mask) -> np.typing.NDArray[np.bool]:
+                             standard_deviations: dict[str, int | float],
+                             mask: mask_type) -> np.typing.NDArray[np.bool]:
     """ Outliers pixels detection
     ---
 
@@ -305,12 +211,10 @@ def outliers_pixels_estimate(data_tensor: float_arr_type, axis_names: list[str],
         standard_deviations (dict[str, int | float], optional):
             Numbers of standard deviations above the means above which the values of the pixels \\
             classifie them as outliers (and lead to returning a `True` entry at their position), \\
-            for each given axis (as long as its name is found in the header via `axis_names`) \\
-            Defaults to `param.outliers_sigmas` (since used only for outliers by default)
+            for each given axis (as long as its name is found in the header via `axis_names`)
         mask (dict[str, list[tuple[int | float, int | float]]], optional):
             Lists of intervals between which pixels are ignored when searching for outliers, \\
-            for each given axis (as long as its name is found in the header via `axis_names`) \\
-            Defaults to `param.outliers_mask` (since used only for outliers by default)
+            for each given axis (as long as its name is found in the header via `axis_names`)
 
     Returns:
         outliers_pixels (np.typing.NDArray[np.bool]):
@@ -367,63 +271,14 @@ def stellar_spectrum_estimate(D: float_arr_type) -> float_arr_type:
 
     return s_est
 
-def point_spread_function_estimate_S3(D: float_arr_type, s_est: float_arr_type,
-                                      world_grids: list[tuple[list[int], float_arr_type]],
-                                      covariances: tuple_float_arr_type) -> float_arr_type:
-    """ PSF estimation - Stellar Spread Subtraction (S3) version
+def point_spread_function_estimate(D: float_arr_type, s_est: float_arr_type,
+                                   world_grids: list[tuple[list[int], float_arr_type]],
+                                   covariances: tuple_float_arr_type) -> float_arr_type:
+    """ Point Spread Function estimation
     ---
 
-    Estimation of the Point Spread Function matrix  using the S3 method, \\
-    that is to say directly by division of the data with the stellar spectrum estimate
-
-    - As there is no regularization with this method, the subtraction of the stellar component \\
-    in the following steps should lead to the null matrix following the mathematical model: \\
-    in practice, this reveals the numerical instabilities inherent to any machine calculation
-    - Yet, this approach is an usefull tool to get an idea of the smoothness of the PSF
-
-    Args:
-        D (np.typing.NDArray[np.float64]):
-            Data matrix from which to estimate the Point Spread Function
-        s_est (np.typing.NDArray[np.float64]):
-            Stellar spectrum estimate by mean of the selected pixels \\
-            (with the `stellar_spectrum_estimate` function)
-        covariances (tuple[np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]):
-            Rows and columns noise covariances matrices estimates \\
-            (with the `noise_covariance_estimate` function) \\
-            or `np.nan` to indicate unestimated covariances
-        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
-            grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
-
-    Returns:
-        psf_est (np.typing.NDArray[np.float64]):
-            Point Spread Function estimate with the S3 method
-    """
-
-    out = np.full_like(D, np.nan) # Default 'psf_est' value
-    where = (s_est != 0) & ~ np.isnan(s_est) # Divisibility
-    psf_est = np.divide(D, s_est, where = where, out = out)
-
-    # Save of the PSF
-    if param.save_verbose:
-        # Dictionnary associating the spectral channels with their flux values
-        psf_est_dict = {f"Channel {j}" : psf_est[:, j] for j in range(len(psf_est[0]))}
-        # Name of the .npz file in which are saved the spectral channels flux values
-        save_name = f"_PSF_{int(len(os.listdir(param.outputs_path))/2)}_.npz"
-        # Save of the Legendre coefficients representing the reduced PSF
-        np.savez(param.outputs_path + save_name, **psf_est_dict)
-
-    return psf_est
-
-def point_spread_function_estimate_S4(D: float_arr_type, s_est: float_arr_type,
-                                      world_grids: list[tuple[list[int], float_arr_type]],
-                                      covariances: tuple_float_arr_type) -> float_arr_type:
-    """ PSF estimation - Stellar Spread Subtraction (S4) version
-    ---
-
-    Estimation of the Point Spread Function matrix using the S4 method, \\
-    that is to say by factorizing the PSF matrix with one Legendre polynomial matrix, \\
+    Estimation of the Point Spread Function matrix, \\
+    by factorizing the PSF matrix with one Legendre polynomial matrix, \\
     on the features / spectral side (using the assumption of PSF smoothness in this direction)
 
     - The regularization that this factorization causes allows a much robust (yet biaised) \\
@@ -471,10 +326,10 @@ def point_spread_function_estimate_S4(D: float_arr_type, s_est: float_arr_type,
     # Matrix of the Legendre polynomials
     # by following Bonnet's recursion formula
     # -> (n+1)Pn+1(x) = (2n+1)xPn(x) - nPn-1(x)
-    lower_spectral_dimension = param.psf_degrees[0] + 1
+    lower_spectral_dimension = param.psf_degree + 1
     M = np.tile(legendre_grid, (lower_spectral_dimension, 1))
     M[0] = 1 # Degree 0 (total flux) Legendre polynomial
-    for i in range(2, lower_spectral_dimension):
+    for i in range(2, param.psf_degree + 1):
         M[i] *= M[i-1] * (2 * i - 1) / i
         M[i] -= M[i-2] * (i - 1) / i
 
@@ -543,141 +398,8 @@ def point_spread_function_estimate_S4(D: float_arr_type, s_est: float_arr_type,
         # Coefficients normalization (for homogeneous comparisons)
         coeffs_normalization = np.linalg.norm(D[:, cols_masking], axis = 1)[:, None]
         coeffs_normalization[np.isnan(coeffs_normalization) | (coeffs_normalization == 0)] = 1
-        coeffs_est /= coeffs_normalization
-        # Add of the previous coefficients if they exist
-        # (to avoid overloading 'outputs' with too many files)
-        if os.path.exists(param.outputs_path + "_PSF_rows_.npy"):
-            coeffs_est += np.load(param.outputs_path + "_PSF_rows_.npy")
-        # Save of these new coefficients representing the reduced PSF
-        np.save(param.outputs_path + "_PSF_rows_.npy", coeffs_est)
-
-    return psf_est
-
-def point_spread_function_estimate_S5(D: float_arr_type, s_est: float_arr_type,
-                                      world_grids: list[tuple[list[int], float_arr_type]],
-                                      covariances: tuple_float_arr_type) -> float_arr_type:
-    """ PSF estimation - Stellar Spread Subtraction (S5) version
-    ---
-
-    Estimation of the Point Spread Function matrix using the S5 method, \\
-    that is to say by factorizing the PSF matrix with two Legendre polynomial matrix, \\
-    on the features / spectral side (using the assumption of PSF smoothness in this direction), \\
-    but also on the observations side (e.g. assuming the PSF smoothness in the radial direction)
-
-    - The regularization that this factorization causes allows a much robust (yet biaised) \\
-    estimation of the PSF with regard to the noise (or even to any other source in the data)
-    - This comes to estimate the stellar component of the data with a polynomial modulation \\
-    of the stellar spectrum estimate (in a robust way thanks to the Legendre Basis), \\
-    but also with a polynomial modulation of the PSF in the observations axes direction \\
-    (e.g. in the radial direction if the axes are the relative right ascensions / declinaisons)
-
-    With this factorization and the assumption of a Gaussian noise, \\
-    the maximum likehood estimate of the Point Spread Function matrix becomes:
-
-        N (N^T C_v N)^-1 N C_v D C_w Ms (Ms C_w Ms^T)^-1 Ms
-
-    with `Ms` the matrix of Legendre polynomial modulation of the stellar spectrum estimate, \\
-    and `C_w` the covariance matrix of the noise in the rows direction, \\
-    as well as `N` the design matrix of the Legendre polynomials, \\
-    and `C_v` the covariance matrix of the noise in the cols direction
-
-    Args:
-        D (np.typing.NDArray[np.float64]):
-            Data matrix from which to estimate the Point Spread Function
-        s_est (np.typing.NDArray[np.float64]):
-            Stellar spectrum estimate by mean of the selected pixels \\
-            (with the `stellar_spectrum_estimate` function)
-        covariances (tuple[np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]):
-            Rows and columns noise covariances matrices estimates \\
-            (with the `noise_covariance_estimate` function) \\
-            or `np.nan` to indicate unestimated covariances
-        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
-            grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
-
-    Returns:
-        psf_est (np.typing.NDArray[np.float64]):
-            Point Spread Function estimate with the S5 method
-    """
-    
-    # Legendre polynomial fit of the data rows
-    psf_est = point_spread_function_estimate_S4(**locals())
-
-    # Non-cols grids construction
-    # (averaging along correlated non-cols axes)
-    cols_grids_axes = [] # Liste of the axis grids
-    for axis_index in range(len(world_grids) - 1):
-        non_cols_grid_axes = list(range(len(world_grids[axis_index][0])))
-        del non_cols_grid_axes[world_grids[axis_index][0].index(axis_index)]
-        cols_grid_axis = np.mean(world_grids[axis_index][1].T, axis = tuple(non_cols_grid_axes))
-        cols_grids_axes.append(cols_grid_axis)
-    # Euclidean merge of the grids of the different cols axes
-    merged_grids = np.meshgrid(*cols_grids_axes, indexing = 'ij')
-    euclidian_merged_grids = np.sqrt(sum(grid**2 for grid in merged_grids))
-    cols_grid = euclidian_merged_grids.reshape(-1, 1) # Vectorization as the columns axes
-
-    # Shift of the 'cols_grid' in the Legendre [-1,1] range
-    legendre_grid = 2 * (cols_grid - min(cols_grid)) / (max(cols_grid) - min(cols_grid)) - 1
-
-    # Matrix of the Legendre polynomials
-    # by following Bonnet's recursion formula
-    # -> (n+1)Pn+1(x) = (2n+1)xPn(x) - nPn-1(x)
-    lower_columns_dimension = param.psf_degrees[1] + 1
-    N = np.tile(legendre_grid, (1, lower_columns_dimension))
-    N[:, 0] = 1 # Degree 0 (total flux) Legendre polynomial
-    for j in range(2, lower_columns_dimension):
-        N[:, j] *= N[:, j-1] * (2 * j - 1) / j
-        N[:, j] -= N[:, j-2] * (j - 1) / j
-
-    # Data 'D' matrix cols full of 'NaN' masking
-    rows_masking = ~ np.all(np.isnan(D), axis = 1)
-
-    # Scaling of all other cols (regressors) to unit norms
-    # so that each one of them weight equally in the regression
-    regressors_norms = np.linalg.norm(N[rows_masking, 1:], axis = 0)
-    N[:, 1:] /= regressors_norms
-
-    # Data 'D' matrix 'NaN' values zeroing
-    all_nan_D_images = np.all(np.isnan(D), axis = 0)
-    D[np.isnan(D)] = 0 # For the matrix multiplications
-    
-    # Precision matrix weighting
-    if covariances[1] is np.nan: covariances[1] = np.identity(D.shape[0])
-    rows_masking = rows_masking & ~ np.all(np.isnan(covariances[1]), axis = 0)
-    masked_cols_covariance = covariances[1][rows_masking, :][:, rows_masking]
-    rows_precision_matrix = np.linalg.inv(masked_cols_covariance)
-    N = N[rows_masking]
-
-    # Matrix of orthogonal projection onto the column space of 'N'
-    # 'N' is well conditionned as based on the Legendre polynomials
-    # Orthogonality could also ease constraining based on physical priors
-    N_Gram_matrix = N.T @ rows_precision_matrix @ N
-    Pi_N = np.linalg.inv(N_Gram_matrix) @ N.T
-
-    # Estimation of the PSF
-    all_nan_psf_spaxels = np.all(np.isnan(psf_est), axis = 1)
-    psf_est = N @ Pi_N[:, ~ all_nan_psf_spaxels] @ psf_est[ ~ all_nan_psf_spaxels]
-    psf_est[all_nan_psf_spaxels, :] = np.nan
-    psf_est[:, all_nan_D_images] = np.nan
-
-    # Save of the Legendre coefficients
-    # being a reduced estimate of the PSF
-    if param.save_verbose:
-        # Estimation of the Legendre polynomial coefficients of the data decomposition
-        coeffs_est = Pi_N @ rows_precision_matrix @ D[rows_masking]
-        # Reset to 'NaN' of the data spaxels full of 'NaN'
-        coeffs_est[:, all_nan_D_images] = np.nan
-        # Coefficients normalization (for homogeneous comparisons)
-        coeffs_normalization = np.linalg.norm(D[rows_masking], axis = 0)
-        coeffs_normalization[np.isnan(coeffs_normalization) | (coeffs_normalization == 0)] = 1
-        coeffs_est /= coeffs_normalization
-        # Add of the previous coefficients if they exist
-        # (to avoid overloading 'outputs' with too many files)
-        if os.path.exists(param.outputs_path + "_PSF_cols_.npy"):
-            coeffs_est += np.load(param.outputs_path + "_PSF_cols_.npy")
-        # Save of these new coefficients representing the reduced PSF
-        np.save(param.outputs_path + "_PSF_cols_.npy", coeffs_est)
+        # Save of the normalized coefficients representing the reduced PSF
+        np.save("PSF.npy", coeffs_est / coeffs_normalization)
 
     return psf_est
 
@@ -820,17 +542,18 @@ def masking_tool(data_tensor: float_arr_type, axis_names: list[str],
             Masked data tensor, i.e. with NaN at the intersection of the given intervals
     """
 
-    pixels_to_be_masked = np.zeros_like(data_tensor) # To identify the intersection
+    for interval_to_be_masked in intervals_to_be_masked:
 
-    for axis_name, intervals_bounds in intervals_to_be_masked.items():
-        if axis_name not in axis_names: continue
-        axis_index = axis_names.index(axis_name)
+        pixels_to_be_masked = np.zeros_like(data_tensor) # To identify the intersection
 
-        non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
-        del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
-        axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
+        for axis_name, (lower_bound, upper_bound) in interval_to_be_masked.items():
 
-        for lower_bound, upper_bound in intervals_bounds:
+            if axis_name not in axis_names: continue
+            axis_index = axis_names.index(axis_name)
+
+            non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
+            del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
+            axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
 
             if isinstance(lower_bound, float):
                 if axis_grid[0] < axis_grid[-1]:
@@ -847,15 +570,15 @@ def masking_tool(data_tensor: float_arr_type, axis_names: list[str],
             slicer[axis_index] = slice(lower_bound, upper_bound)
             pixels_to_be_masked[tuple(slicer)] += 1
 
-    masks_intersection = (pixels_to_be_masked == max(1, np.max(pixels_to_be_masked)))
+        masks_intersection = (pixels_to_be_masked == max(1, np.max(pixels_to_be_masked)))
 
-    data_tensor[masks_intersection] = np.nan
+        data_tensor[masks_intersection] = np.nan
 
     return data_tensor
 
 def filtering_tool(data_tensor: float_arr_type, axis_names: list[str],
                    world_grids: list[tuple[list[int], float_arr_type]],
-                   loc_scale_filter_lists: mask_type) -> float_arr_type:
+                   loc_scale_filter_list: mask_type) -> float_arr_type:
     """ Filtering tool - multiplication with unit-height Gaussians
     ---
 
@@ -877,7 +600,7 @@ def filtering_tool(data_tensor: float_arr_type, axis_names: list[str],
             Grids of the world (physical) values of the different axis, \\
             grouped by correlated axes so that each tuple contains a list of axis indexes \\
             followed by the grid of the corresponding axes, in the same access order
-        loc_scale_filter_lists (mask_type):
+        loc_scale_filter_list (mask_type):
             List of locations and scales of Gaussians to sum to build a global filter \\
             for each given axis (as long as its name is found in the header via `axis_names`)
 
@@ -889,19 +612,18 @@ def filtering_tool(data_tensor: float_arr_type, axis_names: list[str],
 
     gaussian = lambda grid, loc, scale: np.exp(-1/2 * ((grid-loc) / scale)**2)
 
-    global_filter = np.ones_like(data_tensor)
+    for loc_scale_filter_dict in loc_scale_filter_list:
 
-    for axis_name, loc_scale_filter_list in loc_scale_filter_lists.items():
-        if axis_name not in axis_names: continue
-        axis_index = axis_names.index(axis_name)
+        global_filter = np.ones_like(data_tensor)
 
-        non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
-        del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
-        axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
+        for axis_name, (loc_filter, scale_filter) in loc_scale_filter_dict.items():
 
-        axis_filter = np.zeros_like(axis_grid)
+            if axis_name not in axis_names: continue
+            axis_index = axis_names.index(axis_name)
 
-        for loc_filter, scale_filter in loc_scale_filter_list:
+            non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
+            del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
+            axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
 
             if isinstance(loc_filter, int):
                 loc_filter = axis_grid[loc_filter]
@@ -913,21 +635,18 @@ def filtering_tool(data_tensor: float_arr_type, axis_names: list[str],
                 scale_filter_left = axis_grid[loc_filter_index - scale_filter]
                 scale_filter = np.abs(scale_filter_right - scale_filter_left) / 2
 
-            axis_filter += gaussian(axis_grid, loc_filter, scale_filter)
+            shape = [1] * data_tensor.ndim
+            shape[axis_index] = data_tensor.shape[axis_index]
 
-        shape = [1] * data_tensor.ndim
-        shape[axis_index] = data_tensor.shape[axis_index]
+            global_filter *= gaussian(axis_grid, loc_filter, scale_filter).reshape(shape)
 
-        if axis_filter.any():
-            global_filter *= axis_filter.reshape(shape)
-
-    data_tensor *= global_filter
+        data_tensor *= global_filter
 
     return data_tensor
 
 def hindering_tool(data_tensor: float_arr_type, axis_names: list[str],
                    world_grids: list[tuple[list[int], float_arr_type]],
-                   loc_scale_hinder_lists: mask_type) -> float_arr_type:
+                   loc_scale_hinder_list: mask_type) -> float_arr_type:
     """ Hindering tool - multiplication with reversed unit-height Gaussians
     ---
 
@@ -952,7 +671,7 @@ def hindering_tool(data_tensor: float_arr_type, axis_names: list[str],
             Grids of the world (physical) values of the different axis, \\
             grouped by correlated axes so that each tuple contains a list of axis indexes \\
             followed by the grid of the corresponding axes, in the same access order
-        loc_scale_filter_lists (mask_type):
+        loc_scale_filter_list (mask_type):
             List of locations and scales of Gaussians to sum to build a global reversed hinder \\
             for each given axis (as long as its name is found in the header via `axis_names`), \\
             itself subtracted from the unit-arrays to build the global hinder ultimately used
@@ -965,19 +684,18 @@ def hindering_tool(data_tensor: float_arr_type, axis_names: list[str],
 
     gaussian = lambda grid, loc, scale: np.exp(-1/2 * ((grid-loc) / scale)**2)
 
-    global_reversed_hinder = np.ones_like(data_tensor)
+    for loc_scale_hinder_dict in loc_scale_hinder_list:
 
-    for axis_name, loc_scale_hinder_list in loc_scale_hinder_lists.items():
-        if axis_name not in axis_names: continue
-        axis_index = axis_names.index(axis_name)
+        global_reversed_hinder = np.ones_like(data_tensor)
 
-        non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
-        del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
-        axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
+        for axis_name, (loc_hinder, scale_hinder) in loc_scale_hinder_dict.items():
 
-        axis_reversed_hinder = np.zeros_like(axis_grid)
+            if axis_name not in axis_names: continue
+            axis_index = axis_names.index(axis_name)
 
-        for loc_hinder, scale_hinder in loc_scale_hinder_list:
+            non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
+            del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
+            axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
 
             if isinstance(loc_hinder, int):
                 loc_hinder = axis_grid[loc_hinder]
@@ -989,22 +707,19 @@ def hindering_tool(data_tensor: float_arr_type, axis_names: list[str],
                 scale_hinder_left = axis_grid[loc_hinder_index - scale_hinder]
                 scale_hinder = np.abs(scale_hinder_right - scale_hinder_left) / 2
 
-            axis_reversed_hinder += gaussian(axis_grid, loc_hinder, scale_hinder)
+            shape = [1] * data_tensor.ndim
+            shape[axis_index] = data_tensor.shape[axis_index]
 
-        shape = [1] * data_tensor.ndim
-        shape[axis_index] = data_tensor.shape[axis_index]
+            global_reversed_hinder *= gaussian(axis_grid, loc_hinder, scale_hinder).reshape(shape)
 
-        if axis_reversed_hinder.any():
-            global_reversed_hinder *= axis_reversed_hinder.reshape(shape)
+        global_hinder = np.max(global_reversed_hinder)*np.ones_like(global_reversed_hinder)
+        global_hinder -= global_reversed_hinder
 
-    global_hinder = np.max(global_reversed_hinder)*np.ones_like(global_reversed_hinder)
-    global_hinder -= global_reversed_hinder
-
-    if global_hinder.any(): data_tensor *= global_hinder
+        if global_hinder.any(): data_tensor *= global_hinder
 
     return data_tensor
 
-################################################################################################### Show
+################################################################################################### Display
 
 def show_dematricized(dematricized_data: float_arr_type,
                       pixels_axis_name: str, pixels_axis_unit: str,
@@ -1097,14 +812,16 @@ def show_dematricized(dematricized_data: float_arr_type,
     plt.suptitle(suptitle, fontsize = 24)
     # Fullscreen (depending on the graphics engine - backend - used by matplotlib)
     manager, backend = plt.get_current_fig_manager(), plt.get_backend().lower()
-    if 'tkagg' in backend:
-        try: manager.window.state('zoomed')
-        except: manager.window.wm_state('zoomed')
-    elif 'qt' in backend: manager.window.showMaximized()
-    elif "wx" in backend: manager.frame.Maximize(True)
-    elif 'gtk' in backend: manager.window.maximize()
-    elif backend == 'macosx': pass
-    else: pass
+    try:
+        if 'gtk' in backend: manager.window.maximize()
+        elif 'wx' in backend: manager.frame.Maximize(True)
+        elif 'qt' in backend: manager.window.showMaximized()
+        elif 'tk' in backend: # Windows ('nt') or Linux/macOS
+            if os.name == 'nt': manager.window.state('zoomed')
+            match os.uname().sysname: # Linux or macOS ('Darwin')
+                case 'Linux': manager.window.attributes('-zoomed', True)
+                case 'Darwin': manager.window.attributes('-fullscreen', True)
+    except Exception: pass
 
     # World axes labels determination
     plot_xlabel_name = axis_names[-1]

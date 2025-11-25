@@ -16,7 +16,7 @@ import process
 from astropy.utils.exceptions import AstropyWarning
 warnings.simplefilter('ignore', category = AstropyWarning)
 
-sep = os.path.sep # '/' for Linux/Mac or '\' for Windows
+sep = os.path.sep # '/' for Linux/macOS or '\' for Windows
 
 ################################################################################################### Time starting
 
@@ -58,6 +58,14 @@ for input_path in expanded_input_paths:
 
     hdul = fits.open(input_path)
 
+    if param.save_verbose: # Moving within the outputs folders for the subsequent .npy saves
+
+        outputs_folder = os.path.join(outputs_path, input_path.split(sep)[-1][:-5])
+        if not os.path.exists(outputs_folder): os.mkdir(outputs_folder)
+
+        working_directory = os.getcwd()
+        os.chdir(outputs_folder)
+
     for hdu in hdul:
         data = hdu.data
         header = hdu.header
@@ -79,17 +87,11 @@ for input_path in expanded_input_paths:
             axis_names = wcs.axis_type_names
             axis_units = wcs.world_axis_units
 
-            # Pixels axis
-            # name and unit
-            if param.show_verbose:
-                try:
-                    axis_names += [header['BTYPE']]
-                except KeyError:
-                    axis_names += ["Flux"]
-                try:
-                    axis_units += [header['BUNIT']]
-                except KeyError:
-                    axis_units += ["< u >"]
+            # Pixels axis name and unit
+            try: axis_names += [header['BTYPE']]
+            except KeyError: axis_names += ["Flux"]
+            try: axis_units += [header['BUNIT']]
+            except KeyError: axis_units += ["unit"]
             
 ################################################################################################### Origin relocation
 
@@ -229,17 +231,23 @@ for input_path in expanded_input_paths:
             for axis_name, bounds in param.zooms.items():
                 if axis_name not in axis_names: continue
                 axis_index = axis_names.index(axis_name)
-                list_array_zooms_key = list(array_bounds[axis_index])
-                list_array_zooms_key[0] = max(0, list_array_zooms_key[0]) # For positive indexes
-                list_array_zooms_key[1] += 1 # To include the upper bounds in the zoom selection
-                slice_zooms[axis_index] = slice(*list_array_zooms_key)
+                array_zooms_axis = list(array_bounds[axis_index])
+                array_zooms_axis[0] = max(0, array_zooms_axis[0])
+                array_zooms_axis[1] += 1 # To include upper bounds
+                slice_zooms[axis_index] = slice(*array_zooms_axis)
 
-            # WCS, data and header zooming
+            # WCS, header and data zooming
             tuple_slice_zooms = tuple(slice_zooms)[::-1]
             zoomed_wcs = wcs.slice(tuple_slice_zooms)
+            zoomed_header = zoomed_wcs.to_header()
             zoomed_data = data[tuple_slice_zooms]
-            header = zoomed_wcs.to_header()
-            
+
+            # Header correction with the new coordinates reference pixel
+            # without any further changes to avoid known compatibility issues
+            # with some of the subsequent .fits visualization softwares (e.g. QFitsView)
+            for axis_index in range(len(zoomed_data.shape)):
+                header[f'CRPIX{axis_index + 1}'] = zoomed_header[f'CRPIX{axis_index + 1}']
+
 ################################################################################################### Data sum up
 
             if param.print_verbose:
@@ -316,17 +324,55 @@ for input_path in expanded_input_paths:
                             raise ValueError("\x1B[31m" + error_message + "\x1B[0m") from None
                     world_grids[corr_axis] = (corr_axes.tolist(), needed_grid)
 
+################################################################################################### Axes ordering
+
+            # Move of the spectral axis to the ultimate position
+            # (with a transpose '.T' against the wcs-array reversed order)
+            # Optimization by putting the observations along the ultimate axis position
+            # (the observations being used as a single block usually, thus preferably contiguously)
+            zoomed_data = np.moveaxis(zoomed_data.T, spectral_axis, -1)
+            
+            # Move of the spectral axis to the ultimate position for grids too
+            # (and associated correction of the grid axis indexes where needed)
+            for axis_index in range(len(world_grids)):
+                for corr_axis_index in range(len(world_grids[axis_index][0])):
+                    if world_grids[axis_index][0][corr_axis_index] == spectral_axis:
+                        world_grids[axis_index][0][corr_axis_index] = len(world_grids) - 1
+                    elif world_grids[axis_index][0][corr_axis_index] > spectral_axis:
+                        world_grids[axis_index][0][corr_axis_index] -= 1
+            world_grids.append(world_grids[spectral_axis])
+            world_grids.pop(spectral_axis)
+
+            # Move of the spectral axis
+            # to the penultimate position for axis names
+            # (so that the pixels axis remains the last one)
+            axis_names.insert(-1, axis_names[spectral_axis])
+            axis_names.pop(spectral_axis)
+
+            # Move of the spectral axis
+            # to the penultimate position for axis units
+            # (so that the pixels axis remains the last one)
+            axis_units.insert(-1, axis_units[spectral_axis])
+            axis_units.pop(spectral_axis)
+
 ################################################################################################### Main processing
 
-            data = process.process(zoomed_data, spectral_axis, world_grids, axis_names, axis_units)
+            post_processed_data = process.process(zoomed_data, axis_names, axis_units, world_grids)
+
+################################################################################################### Axes reordering
+
+            # Move of the spectral axis to its original position
+            # (with a transpose '.T' against the wcs-array reversed order)
+            post_processed_data = np.moveaxis(post_processed_data.T, -1, spectral_axis)
 
 ################################################################################################### Outputs saving
 
-            hdu.header.update(header)
-            hdu.data = data
+            hdu.header = header
+            hdu.data = post_processed_data
     
-    if param.save_verbose:
-        hdul.writeto(outputs_path + input_path.split(sep)[-1], overwrite = True)
+    if param.save_verbose: os.chdir(working_directory)
+
+    hdul.writeto(outputs_path + input_path.split(sep)[-1], overwrite = True)
 
 ################################################################################################### Data files closing
 

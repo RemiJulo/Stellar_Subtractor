@@ -4,8 +4,9 @@
 
 class argmax: pass
 
-###################################################################################################
-###################################################################################################
+################################################################################################### ###################
+################################################################################################### IN/OUTPUTS FEATURES
+################################################################################################### ###################
 # List of paths to .fits files (or to folders full of .fits files) to be post-processed
 
 inputs_paths = ["inputs/"]
@@ -17,8 +18,9 @@ inputs_paths = ["inputs/"]
 
 outputs_path = "outputs/"
 
-###################################################################################################
-###################################################################################################
+################################################################################################### ###################
+################################################################################################### AXIS GRIDS FEATURES
+################################################################################################### ###################
 # Origin coordinates relocation ('int' for pixel values or 'float' for physical values)
 # Herewith, 'argmax()' is also usable to recover the coordinates of the brightest pixel
 # For instance, the entry " 'AWAV' : 0.0 " allows to replace the air wavelengths origin
@@ -29,13 +31,9 @@ outputs_path = "outputs/"
 
 origin = {
 
-    'AWAV' : 0.0
-
 }
 
 origin_units = {
-
-    'AWAV' : 'Å'
 
 }
 
@@ -50,26 +48,19 @@ origin_units = {
 
 zooms = {
     
-    'RA' : (0.6,-0.6),
-    'DEC' : (-0.6,0.6),
-
-    'AWAV' : (6462.8,6762.8)
-
 }
 
 zooms_units = {
 
-    'RA' : 'arcsec',
-    'DEC' : 'arcsec',
-
-    'AWAV' : 'Å'
-
 }
 
-###################################################################################################
-###################################################################################################
-# Detection of the outliers for their masking during the full duration of the post-processings
-# Built as a dictionary associating axis names with numbers of standard deviations above means
+################################################################################################### ###################
+################################################################################################### ESTIMATION FEATURES
+################################################################################################### ###################
+# Detection of the outliers for their masking (replacement by NaN) during the post-processing
+# Built as a dictionary associating axis names with the numbers of standard deviations
+# above the means above which the values along the corresponding axes
+# are considered outliers and are therefore masked
 
 outliers_sigmas = {
 
@@ -78,17 +69,16 @@ outliers_sigmas = {
 }
 
 ###################################################################################################
-# Misleading a priori in the form of a dictionary associating axis names with lists of doublets
-# between which pixels are masked (and disregarded) during the outliers detection and selection
-# The final global mask is the intersection of the sub total masks defined for each of the axes
+# Misleading a priori in the form of a list of dictionaries associating axis names with doublets
+# between which pixels are masked (thus disregarded) during the outliers detection and selection
+# Each dictionnary defines a mask as an intersection of intervals along the different given axes
 
-outliers_mask = {
+outliers_mask = [
 
 
+    
+]
 
-}
-
-###################################################################################################
 ###################################################################################################
 # Height of the stellar level compared to the one of the noise level (setting noise/stellar areas)
 # The stellar component of the pixels with a flux below this threshold is assumed to be negligible
@@ -98,58 +88,58 @@ outliers_mask = {
 # Too large values of 'stellar_sigma' lead to a selection of too many too noisy pixels in practice
 # (thus could lead to uncanny results in the following because of various numerical instabilities)
 
-stellar_level = 50
+stellar_level = 10
 
 ###################################################################################################
-# Misleading a priori in the form of a dictionary associating axis names with lists of doublets
-# between which pixels are masked (and disregarded) during the stellar spectrum estimation step
-# The final global mask is the intersection of the sub total masks defined for each of the axes
+# Misleading a priori in the form of a list of dictionaries associating axis names with doublets
+# between which pixels are masked (thus disregarded) during the stellar spectrum estimation step
+# Each dictionnary defines a mask as an intersection of intervals along the different given axes
 
-stellar_mask = {
+stellar_mask = [
 
 
 
-}
-
-###################################################################################################
-###################################################################################################
-# Instrument-dependent hyperparameters dealing with the smoothness of its point spread function
-# Empty set to estimate directly the PSF by division of the data by a stellar spectrum estimate
-# Singleton to set the degree of a Legendre polynomial to fit the spectral behaviour of the PSF
-# Doublet to set the degrees of Legendre polynomials to fit the behaviour of the PSF as a whole
-# (this last option being only realistic and thus relevant in the next version of 'process.py')
-
-psf_degrees = [4]
+]
 
 ###################################################################################################
-# Misleading a priori in the form of a dictionary associating axis names with lists of doublets
-# between which pixels are masked (and disregarded) during the point spread function estimation
-# The final global mask is the intersection of the sub total masks defined for each of the axes
+# Instrument-dependent hyperparameter dealing with the smoothness of its point spread function
+# (knowing that this smoothness is relative to the spectral window sizes ultimately selected)
+# It is the degree of truncation of the Legendre polynomial basis used for the decomposition
+# of the chromatic PSF (i.e. the spectrum deformations given by the PSF spectral evolution)
+# This can also be seen as the degree of polynomials used to fit each of the chromatic PSF
+# The appendix file 'app.py' allows to validate the relevance of this choice afterward
+# by verifying the decrease in the energy of the coefficients down to the noise levels
+# as well as the shape of the patterns actually estimated within the stellar component
 
-psf_mask = {
-
-    'AWAV' : [(6552.8,6572.8)],
-
-}
+psf_degree = 1
 
 ###################################################################################################
+# Misleading a priori in the form of a list of dictionaries associating axis names with doublets
+# between which pixels are masked (thus disregarded) during the point spread function estimation
+# Each dictionnary defines a mask as an intersection of intervals along the different given axes
+
+psf_mask = [
+
+
+
+]
+
 ###################################################################################################
 # Number of PSF estimation loopback (taking into account an increasingly better noise estimate)
 
 noise_loopback = 0
 
 ###################################################################################################
-# Misleading a priori in the form of a dictionary associating axis names with lists of doublets
-# between which pixels are masked (and disregarded) during the 2 covariance matrices estimation
-# The final global mask is the intersection of the sub total masks defined for each of the axes
+# Misleading a priori in the form of a list of dictionaries associating axis names with doublets
+# between which pixels are masked (thus disregarded) during the 2 covariance matrices estimation
+# Each dictionnary defines a mask as an intersection of intervals along the different given axes
 
-noise_mask = {
+noise_mask = [
 
 
+    
+]
 
-}
-
-###################################################################################################
 ###################################################################################################
 # Detection of the anomalies for their highlight in the post-processing report in the terminal
 # Built as a dictionary associating axis names with numbers of standard deviations above means
@@ -161,17 +151,19 @@ anomalies_sigmas = {
 }
 
 ###################################################################################################
-# Misleading a priori in the form of a dictionary associating axis names with lists of doublets
-# between which pixels are masked (and disregarded) during the anomalies detection and highight
-# The final global mask is the intersection of the sub total masks defined for each of the axes
+# Misleading a priori in the form of a list of dictionaries associating axis names with doublets
+# between which pixels are masked (thus disregarded) during the anomalies detection and highight
+# Each dictionnary defines a mask as an intersection of intervals along the different given axes
 
-anomalies_mask = {
+anomalies_mask = [
 
 
 
-}
+]
 
-###################################################################################################
+################################################################################################### ###################
+################################################################################################### MONITORING FEATURES
+################################################################################################### ###################
 # 'save_verbose' for backup feedback in 'outputs_path' ('0' / '1' for no / full display)
 # 'print_verbose' for textual feedback in the terminal ('0' / '1' for no / full display)
 # 'show_verbose' for visual feedback in python windows ('0' / '1' for no / full display)
@@ -183,58 +175,58 @@ print_verbose = 1
 show_verbose = 1
 
 ###################################################################################################
-# Data filters for visual feedbacks (as products with unit-height Gaussians)
-# Built as dictionaries associating axis names with (location, scale) lists
-# of Gaussians parameters doublets with which to filter images and spectra
+# Data filters for visual feedbacks (as a product from unit-height Gaussians)
+# Built as lists of dictionaries associating axis names with (location, scale)
+# Gaussians parameters with which to multiply images and spectra to filter them
 
-spectra_filter = {
-
-
-
-}
-
-images_filter = {
+spectra_filter = [
 
 
 
-}
+]
+
+images_filter = [
+
+]
 
 ###################################################################################################
-# Data maskers for visual feedbacks (as NaNing of the intersection of the selected windows)
-# Built as dictionaries associating axis names with lower and upper bounds doublets lists
-# between which pixels are masked just before the spectra and images means calculations
+# Data maskers for visual feedbacks (as NaNing of the intersection of the selected intervals)
+# Built as lists of dictionaries associating axis names with lower and upper bounds doublets
+# whose intersection of the corresponding intervals is masked for each of the dictionnaries
 
-spectra_masker = {
-
-
-
-}
-
-images_masker = {
+spectra_masker = [
 
 
 
-}
+]
+
+images_masker = [
+
+
+
+]
 
 ###################################################################################################
-# Data hinders for visual feedbacks (as products from unit-height Gaussians)
-# Built as dictionaries associating axis names with (location, scale) lists
-# of Gaussians parameters doublets with which to hinder images and spectra
+# Data hinders for visual feedbacks (as a product from unit-height Gaussians)
+# Built as lists of dictionaries associating axis names with (location, scale)
+# Gaussians parameters with which to multiply images and spectra to hinder them
 
-spectra_hinder = {
-
-
-
-}
-
-images_hinder = {
+spectra_hinder = [
 
 
 
-}
+]
 
+images_hinder = [
+
+
+
+]
+
+################################################################################################### ###################
 ################################################################################################### PARAMETERS CHECKING
 ################################################################################################### -- DO NOT MODIFY --
+################################################################################################### ###################
 
 if not isinstance(inputs_paths, list):
     raise ValueError("\x1B[31m" + "'inputs_paths' should be a list of 'str'" + "\x1B[0m")
@@ -291,85 +283,78 @@ for key, value in outliers_sigmas.items():
         error_message = "'outliers_sigmas' values should be positive 'int/float'"
         raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
-if not isinstance(outliers_mask, dict):
-    raise ValueError("\x1B[31m" + "'outliers_mask' should be a 'dict'" + "\x1B[0m")
-for key, value in outliers_mask.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'outliers_mask' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'outliers_mask' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'outliers_mask' values entries should be 'int/float'-doublets"
+if not isinstance(outliers_mask, list):
+    raise ValueError("\x1B[31m" + "'outliers_mask' should be a 'list'" + "\x1B[0m")
+for entry in outliers_mask:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'outliers_mask' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'outliers_mask' entries keys should be un-empty 'str'"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'outliers_mask' values entries should be 'int/float'-doublets"
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'outliers_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-
-###################################################################################################
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'outliers_mask' entries values should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
 if not isinstance(stellar_level, (int, float)) and not stellar_level >= 0:
     raise ValueError("\x1B[31m" + "'stellar_level' should be a postive 'int/float'" + "\x1B[0m")
 
-if not isinstance(stellar_mask, dict):
-    raise ValueError("\x1B[31m" + "'stellar_mask' should be a 'dict'" + "\x1B[0m")
-for key, value in stellar_mask.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'stellar_mask' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'stellar_mask' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'stellar_mask' values entries should be 'int/float'-doublets"
+if not isinstance(stellar_mask, list):
+    raise ValueError("\x1B[31m" + "'stellar_mask' should be a 'list'" + "\x1B[0m")
+for entry in stellar_mask:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'stellar_mask' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'stellar_mask' entries keys should be un-empty 'str'"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'stellar_mask' values entries should be 'int/float'-doublets"
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'stellar_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        
-###################################################################################################
-
-if not isinstance(psf_degrees, list):
-    raise ValueError("\x1B[31m" + "'psf_degrees' should be a list" + "\x1B[0m")
-for entry in psf_degrees:
-    if not isinstance(entry, int) or not entry >= 0:
-        raise ValueError("\x1B[31m" + "'psf_degrees' entries should be positive 'int'" + "\x1B[0m")
-
-if not isinstance(psf_mask, dict):
-    raise ValueError("\x1B[31m" + "'psf_mask' should be a 'dict'" + "\x1B[0m")
-for key, value in psf_mask.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'psf_mask' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'psf_mask' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'psf_mask' values entries should be 'int/float'-doublets"
-            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'psf_mask' values entries should be 'int/float'-doublets"
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'stellar_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
-###################################################################################################
+if not isinstance(psf_degree, int) or not psf_degree >= 0:
+    raise ValueError("\x1B[31m" + "'psf_degree' should be a positive 'int'" + "\x1B[0m")
+
+if not isinstance(psf_mask, list):
+    raise ValueError("\x1B[31m" + "'psf_mask' should be a 'list'" + "\x1B[0m")
+for entry in psf_mask:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'psf_mask' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'psf_mask' entries keys should be un-empty 'str'"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'psf_mask' entries values should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'psf_mask' entries values should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
 if not isinstance(noise_loopback, int) or not noise_loopback >= 0:
     raise ValueError("\x1B[31m" + "'noise_loopback' should be a positive 'int'" + "\x1B[0m")
 
-if not isinstance(noise_mask, dict):
-    raise ValueError("\x1B[31m" + "'noise_mask' should be a 'dict'" + "\x1B[0m")
-for key, value in noise_mask.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'noise_mask' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'noise_mask' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'noise_mask' values entries should be 'int/float'-doublets"
+if not isinstance(noise_mask, list):
+    raise ValueError("\x1B[31m" + "'noise_mask' should be a 'list'" + "\x1B[0m")
+for entry in noise_mask:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'noise_mask' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'noise_mask' entries keys should be un-empty 'str'"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'noise_mask' values entries should be 'int/float'-doublets"
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'noise_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-
-###################################################################################################
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'noise_mask' entries values should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
 if not isinstance(anomalies_sigmas, dict):
     raise ValueError("\x1B[31m" + "'anomalies_sigmas' should be a 'dict'" + "\x1B[0m")
@@ -381,21 +366,22 @@ for key, value in anomalies_sigmas.items():
         error_message = "'anomalies_sigmas' values should be positive 'int/float'"
         raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
-if not isinstance(anomalies_mask, dict):
-    raise ValueError("\x1B[31m" + "'anomalies_mask' should be a 'dict'" + "\x1B[0m")
-for key, value in anomalies_mask.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'anomalies_mask' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'anomalies_mask' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'anomalies_mask' values entries should be 'int/float'-doublets"
+if not isinstance(anomalies_mask, list):
+    raise ValueError("\x1B[31m" + "'anomalies_mask' should be a 'list'" + "\x1B[0m")
+for entry in anomalies_mask:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'anomalies_mask' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'anomalies_mask' entries keys should be un-empty 'str'"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'anomalies_mask' values entries should be 'int/float'-doublets"
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'anomalies_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'anomalies_mask' entries values should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        
 ###################################################################################################
 
 if not save_verbose in [0,1]:
@@ -405,89 +391,95 @@ if not print_verbose in [0,1]:
 if not show_verbose in [0,1]:
     raise ValueError("\x1B[31m" + "'show_verbose' should be in {'0','1'}" + "\x1B[0m")
 
-if not isinstance(spectra_filter, dict):
-    raise ValueError("\x1B[31m" + "'spectra_filter' should be a 'dict'" + "\x1B[0m")
-for key, value in spectra_filter.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'spectra_filter' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'spectra_filter' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'spectra_filter' values entries should be 'int/float'-doublets"
+if not isinstance(spectra_filter, list):
+    raise ValueError("\x1B[31m" + "'spectra_filter' should be a 'list'" + "\x1B[0m")
+for entry in spectra_filter:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'spectra_filter' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'spectra_filter' entries keys should be un-empty 'str'"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'spectra_filter' values entries should be 'int/float'-doublets"
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'spectra_filter' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-if not isinstance(images_filter, dict):
-    raise ValueError("\x1B[31m" + "'images_filter' should be a 'dict'" + "\x1B[0m")
-for key, value in images_filter.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'images_filter' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'images_filter' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'images_filter' values entries should be 'int/float'-doublets"
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'spectra_filter' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'images_filter' values entries should be 'int/float'-doublets"
+if not isinstance(images_filter, list):
+    raise ValueError("\x1B[31m" + "'images_filter' should be a 'list'" + "\x1B[0m")
+for entry in images_filter:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'images_filter' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'images_filter' entries keys should be un-empty 'str'"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-
-if not isinstance(spectra_masker, dict):
-    raise ValueError("\x1B[31m" + "'spectra_masker' should be a 'dict'" + "\x1B[0m")
-for key, value in spectra_masker.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'spectra_masker' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'spectra_masker' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'spectra_masker' values entries should be 'int/float'-doublets"
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'images_filter' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'spectra_masker' values entries should be 'int/float'-doublets"
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'images_filter' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-if not isinstance(images_masker, dict):
-    raise ValueError("\x1B[31m" + "'images_masker' should be a 'dict'" + "\x1B[0m")
-for key, value in images_masker.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'images_masker' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'images_masker' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'images_masker' values entries should be 'int/float'-doublets"
+        
+if not isinstance(spectra_masker, list):
+    raise ValueError("\x1B[31m" + "'spectra_masker' should be a 'list'" + "\x1B[0m")
+for entry in spectra_masker:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'spectra_masker' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'spectra_masker' entries keys should be un-empty 'str'"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'images_masker' values entries should be 'int/float'-doublets"
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'spectra_masker' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-
-if not isinstance(spectra_hinder, dict):
-    raise ValueError("\x1B[31m" + "'spectra_hinder' should be a 'dict'" + "\x1B[0m")
-for key, value in spectra_hinder.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'spectra_hinder' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'spectra_hinder' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'spectra_hinder' values entries should be 'int/float'-doublets"
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'spectra_masker' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'spectra_hinder' values entries should be 'int/float'-doublets"
+if not isinstance(images_masker, list):
+    raise ValueError("\x1B[31m" + "'images_masker' should be a 'list'" + "\x1B[0m")
+for entry in images_masker:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'images_masker' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'images_masker' entries keys should be un-empty 'str'"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-if not isinstance(images_hinder, dict):
-    raise ValueError("\x1B[31m" + "'images_hinder' should be a 'dict'" + "\x1B[0m")
-for key, value in images_hinder.items():
-    if not key or not isinstance(key, str):
-        raise ValueError("\x1B[31m" + "'images_hinder' keys should be un-empty 'str'" + "\x1B[0m")
-    if not isinstance(value, list):
-        raise ValueError("\x1B[31m" + "'images_hinder' values should be 'list" + "\x1B[0m")
-    for entry in value:
-        if not isinstance(entry, tuple) or not len(entry) == 2:
-            error_message = "'images_hinder' values entries should be 'int/float'-doublets"
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'images_masker' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-        if not isinstance(entry[0], (int, float)) or not isinstance(entry[1], (int, float)):
-            error_message = "'images_hinder' values entries should be 'int/float'-doublets"
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'images_masker' entries values should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        
+if not isinstance(spectra_hinder, list):
+    raise ValueError("\x1B[31m" + "'spectra_hinder' should be a 'list'" + "\x1B[0m")
+for entry in spectra_hinder:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'spectra_hinder' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'spectra_hinder' entries keys should be un-empty 'str'"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'spectra_hinder' entries values should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'spectra_hinder' entries values should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+if not isinstance(images_hinder, list):
+    raise ValueError("\x1B[31m" + "'images_hinder' should be a 'list'" + "\x1B[0m")
+for entry in images_hinder:
+    if not isinstance(entry, dict):
+        raise ValueError("\x1B[31m" + "'images_hinder' entries should be 'dict'" + "\x1B[0m")
+    for key, value in entry.items():
+        if not key or not isinstance(key, str):
+            error_message = "'images_hinder' entries keys should be un-empty 'str'"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not isinstance(value, tuple) or not len(value) == 2:
+            error_message = "'images_hinder' entries values should be 'int/float'-doublets"
+            raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+        if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
+            error_message = "'images_hinder' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
