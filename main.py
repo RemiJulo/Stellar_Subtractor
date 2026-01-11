@@ -87,12 +87,16 @@ for input_path in expanded_input_paths:
             axis_names = wcs.axis_type_names
             axis_units = wcs.world_axis_units
 
-            # Pixels axis name and unit
+            # Brightness axis name and unit
             try: axis_names += [header['BTYPE']]
             except KeyError: axis_names += ["Flux"]
             try: axis_units += [header['BUNIT']]
             except KeyError: axis_units += ["unit"]
             
+            # Conversion of the brightness unit to unicode (for the potential figures)
+            try: axis_units[-1] = units.Unit(axis_units[-1]).to_string(format = "unicode")
+            except ValueError: pass # An unrecognized unit is left as is (as only for figures)
+
 ################################################################################################### Origin relocation
 
             # Default origin from the header
@@ -305,24 +309,24 @@ for input_path in expanded_input_paths:
                 if world_grids[axis][0] == corr_axes.tolist(): continue
 
                 # World grids determination from 'zoomed_wcs' and the correlated axes array grids
-                needed_wcs = zoomed_wcs.sub(tuple(int(corr_axis) + 1 for corr_axis in corr_axes))
-                needed_grids = needed_wcs.array_index_to_world_values(*np.indices(corr_shapes))
+                corr_wcs = zoomed_wcs.sub(tuple(int(corr_axis) + 1 for corr_axis in corr_axes))
+                corr_grids = corr_wcs.array_index_to_world_values(*np.indices(corr_shapes))
 
                 # Save of the grid for the given axis
                 # as well as of the grids for the correlated axes
                 # (generally without additional correlations with other axes)
-                for corr_axis, needed_grid in zip(corr_axes, np.atleast_2d(needed_grids)):
-                    needed_grid -= world_origin[corr_axis] # Shift to the origin coordinate
+                for corr_axis, corr_grid in zip(corr_axes, np.atleast_2d(corr_grids)):
+                    corr_grid -= world_origin[corr_axis] # Shift to the origin coordinate
                     if axis_names[corr_axis] in param.zooms_units.keys():
                         irreducible_unit = units.Unit(axis_units[corr_axis])
                         try: # Unit conversion if possible
                             target_unit = units.Unit(param.zooms_units[axis_names[corr_axis]])
-                            needed_grid = (needed_grid * irreducible_unit).to(target_unit).value
+                            corr_grid = (corr_grid * irreducible_unit).to(target_unit).value
                         except (ValueError, units.UnitConversionError):
                             error_message = f"Axis {axis_names[corr_axis]} unit should be in:\n"
                             error_message += f"{irreducible_unit.find_equivalent_units()}"
                             raise ValueError("\x1B[31m" + error_message + "\x1B[0m") from None
-                    world_grids[corr_axis] = (corr_axes.tolist(), needed_grid)
+                    world_grids[corr_axis] = (corr_axes.tolist(), corr_grid)
 
 ################################################################################################### Axes ordering
 
@@ -357,7 +361,7 @@ for input_path in expanded_input_paths:
 
 ################################################################################################### Main processing
 
-            post_processed_data = process.process(zoomed_data, axis_names, axis_units, world_grids)
+            post_processed_data = process.process(zoomed_data, world_grids, axis_names, axis_units)
 
 ################################################################################################### Axes reordering
 

@@ -31,9 +31,13 @@ outputs_path = "outputs/"
 
 origin = {
 
+
+
 }
 
 origin_units = {
+
+
 
 }
 
@@ -47,26 +51,23 @@ origin_units = {
 # These units are used too in all the following dictionaries
 
 zooms = {
-    
+
+
+
 }
 
 zooms_units = {
+
+
 
 }
 
 ################################################################################################### ###################
 ################################################################################################### ESTIMATION FEATURES
 ################################################################################################### ###################
-# Detection of the outliers for their masking (replacement by NaN) during the post-processing
-# Built as a dictionary associating axis names with the numbers of standard deviations
-# above the means above which the values along the corresponding axes
-# are considered outliers and are therefore masked
+# Number of standard deviations above the mean beyond which a value is considered to be an outlier
 
-outliers_sigmas = {
-
-
-
-}
+outliers_sigma = 5
 
 ###################################################################################################
 # Misleading a priori in the form of a list of dictionaries associating axis names with doublets
@@ -88,14 +89,14 @@ outliers_mask = [
 # Too large values of 'stellar_sigma' lead to a selection of too many too noisy pixels in practice
 # (thus could lead to uncanny results in the following because of various numerical instabilities)
 
-stellar_level = 10
+star_fluxlevel = 50
 
 ###################################################################################################
 # Misleading a priori in the form of a list of dictionaries associating axis names with doublets
 # between which pixels are masked (thus disregarded) during the stellar spectrum estimation step
 # Each dictionnary defines a mask as an intersection of intervals along the different given axes
 
-stellar_mask = [
+star_mask = [
 
 
 
@@ -111,7 +112,7 @@ stellar_mask = [
 # by verifying the decrease in the energy of the coefficients down to the noise levels
 # as well as the shape of the patterns actually estimated within the stellar component
 
-psf_degree = 1
+psf_polydegree = 5
 
 ###################################################################################################
 # Misleading a priori in the form of a list of dictionaries associating axis names with doublets
@@ -137,18 +138,13 @@ noise_loopback = 0
 noise_mask = [
 
 
-    
+
 ]
 
 ###################################################################################################
-# Detection of the anomalies for their highlight in the post-processing report in the terminal
-# Built as a dictionary associating axis names with numbers of standard deviations above means
+# Number of standard deviations above the mean beyond which a value is considered to be an anomaly
 
-anomalies_sigmas = {
-
-
-
-}
+anomalies_sigma = 0
 
 ###################################################################################################
 # Misleading a priori in the form of a list of dictionaries associating axis names with doublets
@@ -186,6 +182,8 @@ spectra_filter = [
 ]
 
 images_filter = [
+
+
 
 ]
 
@@ -273,15 +271,9 @@ for key, value in zooms_units.items():
     
 ###################################################################################################
 
-if not isinstance(outliers_sigmas, dict):
-    raise ValueError("\x1B[31m" + "'outliers_sigmas' should be a 'dict'" + "\x1B[0m")
-for key, value in outliers_sigmas.items():
-    if not key or not isinstance(key, str):
-        error_message = "'outliers_sigmas' keys should be un-empty 'str'"
-        raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-    if not isinstance(value, (int, float)) or not value >= 0:
-        error_message = "'outliers_sigmas' values should be positive 'int/float'"
-        raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+if not isinstance(outliers_sigma, (int, float)) or not outliers_sigma >= 0:
+    error_message = "'outliers_sigma' should be a positive 'int/float'"
+    raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
 if not isinstance(outliers_mask, list):
     raise ValueError("\x1B[31m" + "'outliers_mask' should be a 'list'" + "\x1B[0m")
@@ -299,27 +291,27 @@ for entry in outliers_mask:
             error_message = "'outliers_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
-if not isinstance(stellar_level, (int, float)) and not stellar_level >= 0:
-    raise ValueError("\x1B[31m" + "'stellar_level' should be a postive 'int/float'" + "\x1B[0m")
+if not isinstance(star_fluxlevel, (int, float)) and not star_fluxlevel >= 0:
+    raise ValueError("\x1B[31m" + "'star_fluxlevel' should be a postive 'int/float'" + "\x1B[0m")
 
-if not isinstance(stellar_mask, list):
-    raise ValueError("\x1B[31m" + "'stellar_mask' should be a 'list'" + "\x1B[0m")
-for entry in stellar_mask:
+if not isinstance(star_mask, list):
+    raise ValueError("\x1B[31m" + "'star_mask' should be a 'list'" + "\x1B[0m")
+for entry in star_mask:
     if not isinstance(entry, dict):
-        raise ValueError("\x1B[31m" + "'stellar_mask' entries should be 'dict'" + "\x1B[0m")
+        raise ValueError("\x1B[31m" + "'star_mask' entries should be 'dict'" + "\x1B[0m")
     for key, value in entry.items():
         if not key or not isinstance(key, str):
-            error_message = "'stellar_mask' entries keys should be un-empty 'str'"
+            error_message = "'star_mask' entries keys should be un-empty 'str'"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
         if not isinstance(value, tuple) or not len(value) == 2:
-            error_message = "'stellar_mask' entries values should be 'int/float'-doublets"
+            error_message = "'star_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
         if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
-            error_message = "'stellar_mask' entries values should be 'int/float'-doublets"
+            error_message = "'star_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
-if not isinstance(psf_degree, int) or not psf_degree >= 0:
-    raise ValueError("\x1B[31m" + "'psf_degree' should be a positive 'int'" + "\x1B[0m")
+if not isinstance(psf_polydegree, int) or not psf_polydegree >= 0:
+    raise ValueError("\x1B[31m" + "'psf_polydegree' should be a positive 'int'" + "\x1B[0m")
 
 if not isinstance(psf_mask, list):
     raise ValueError("\x1B[31m" + "'psf_mask' should be a 'list'" + "\x1B[0m")
@@ -336,7 +328,7 @@ for entry in psf_mask:
         if not isinstance(value[0], (int, float)) or not isinstance(value[1], (int, float)):
             error_message = "'psf_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-
+        
 if not isinstance(noise_loopback, int) or not noise_loopback >= 0:
     raise ValueError("\x1B[31m" + "'noise_loopback' should be a positive 'int'" + "\x1B[0m")
 
@@ -356,15 +348,9 @@ for entry in noise_mask:
             error_message = "'noise_mask' entries values should be 'int/float'-doublets"
             raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
-if not isinstance(anomalies_sigmas, dict):
-    raise ValueError("\x1B[31m" + "'anomalies_sigmas' should be a 'dict'" + "\x1B[0m")
-for key, value in anomalies_sigmas.items():
-    if not key or not isinstance(key, str):
-        error_message = "'anomalies_sigmas' keys should be un-empty 'str'"
-        raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
-    if not isinstance(value, (int, float)) or not value >= 0:
-        error_message = "'anomalies_sigmas' values should be positive 'int/float'"
-        raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+if not isinstance(anomalies_sigma, (int, float)) or not anomalies_sigma >= 0:
+    error_message = "'anomalies_sigma' should be a positive 'int/float'"
+    raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
 
 if not isinstance(anomalies_mask, list):
     raise ValueError("\x1B[31m" + "'anomalies_mask' should be a 'list'" + "\x1B[0m")

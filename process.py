@@ -1,284 +1,269 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+import warnings
 import os
-
-from astropy.units import Unit
-from astropy.stats import sigma_clip
 
 import param
 
 ###################################################################################################
 
-type float_arr_type = np.typing.NDArray[np.float64]
+type tensor_type = np.typing.NDArray[np.float64]
+type w_grids_type = list[tuple[list[int], tensor_type]]
+type boolean_type = np.bool | np.typing.NDArray[np.bool]
+type moment_type = list[int | float, tensor_type, tensor_type]
 type mask_type = list[dict[str, tuple[int | float, int | float]]]
-type tuple_float_arr_type = tuple[float_arr_type, float_arr_type]
 
-################################################################################################### General algorithm
+################################################################################################### Algorithm
 
-def process(data_tensor: float_arr_type,
-            axis_names: list[str], axis_units: list[str],
-            world_grids: list[tuple[list[int], float_arr_type]]) -> float_arr_type:
-    """ Stellar Subtraction - General algorithm
+def process(data_tensor: tensor_type, world_grids: w_grids_type,
+            axis_names: list[str], axis_units: list[str]) -> tensor_type:
+    """ Stellar Subtraction - General algorithm (SLOPES)
     ---
 
-    General algorithm for the stellar subtraction method:
+    The **S.L.O.P.E.S.** acronym stands for \\
+    **S**tellar **L**egendre **O**rthogonal **P**olynomials **E**stimation **S**ubtractor \\
+    and symbolizes both the *slopes* of the chromatic PSFs \\
+    and the algorithm's alpine origin
 
-    - Outliers detection (for their disregard in the following processing)
-    - Data matricization (with observations along the rows and features along the columns)
+    - Outliers detection (for their disregard in the post-processing)
     - Start of the estimation loop (with increasingly better noise estimates)
-        - Stellar spectrum estimation (by averaging a selection of the least noisy pixels)
-        - Point Spread Function estimation (by decomposition on the Legendre basis)
+        - Stellar spectrum estimation (by averaging the selected least noisy pixels)
+        - Point Spread Function estimation (through decomposition on Legendre basis)
         - Stellar component estimation (from the stellar spectrum and PSF estimates)
-        - Noise component estimation (with covariances matrices estimations)
-    - End of the estimation loop (in practice, after two or even just one iteration)
-    - Data tensorization (to the original shape of the input tensor data)
+    - End of the estimation loop (in practice after two or even just one iteration)
     - Anomalies detection (for their highlight in the post-subtraction report)
     
     Args:
         data_tensor (np.typing.NDArray[np.float64]):
-            Data tensor from which to subtract the stellar component \\
-            The last axis of this tensor must be its (only) spectral axis
+            Data from which to subtract the stellar component \\
+            The last axis of this tensor must be its only spectral axis
         world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
+            Grids of the world (physical) values along each of the different axis, \\
             grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
+            followed by the joint grid of the corresponding axes, in the same axis access order
         axis_names (list[str]):
             Names of the different axes as extracted in the data header \\
             The spectral axis entry must be the panultimate one \\
-            (the pixel axis entry being the ultimate one)
+            (brightness axis entry being the ultimate one)
         axis_units (list[str]):
             Units of the different axes as extracted in the data header \\
             The spectral axis entry must be the panultimate one \\
-            (the pixel axis entry being the ultimate one)
-
+            (brightness axis entry being the ultimate one)
     Returns:
-        data_tensor (np.typing.NDArray[np.float64]):
-            Data tensor from which an estimate of the stellar component has been subtracted
+        subtracted_tensor (np.typing.NDArray[np.float64]):
+            Data tensor from which a stellar component estimate has been subtracted
     """
 
-    pixels_axis_name = axis_names.pop() # The pixels axis name and unit are added just
-    pixels_axis_unit = axis_units.pop() # at the end of the axis names and units lists
-
-    # Outliers detection
-
-    outliers = outliers_pixels_estimate(data_tensor, axis_names, world_grids,
-                                        param.outliers_sigmas, param.outliers_mask)
-    data_tensor[outliers] = np.nan
-
-    # Data tensor matricization via
-    # vectorization of the first axes
-    
-    data_tensor_shape = data_tensor.shape
-
-    data = data_tensor.reshape(-1, data_tensor_shape[-1])
+    b_axis_name = axis_names.pop() # The brightness axis name and unit are at
+    b_axis_unit = axis_units.pop() # the end of the axis names and units lists
 
     if param.show_verbose:
-        show_dematricized(data.reshape(data_tensor_shape),
-                          pixels_axis_name, pixels_axis_unit,
-                          axis_names, axis_units, world_grids,
-                          "Pre-processed data\n", 'b', 'plasma')
+        
+        if data_tensor.ndim > 3:
+            warning_message = "Too large number of dimension for image display:"
+            warning_message += "Truncation of the tensor at the first two axes"
+            print("\x1B[33m" + '\n\n' + warning_message + '\n\n' + "\x1B[0m")
 
-    # Estimation loop
+        images_grid = joint_grid([0, 1], world_grids)
+    spectra_grid = joint_grid([-1], world_grids)
 
-    covariances = [np.nan, np.nan] # Rows and columns covariances
+    if param.show_verbose:
 
-    for noise_loop in range(1 + param.noise_loopback):
+        data_show(data_tensor, world_grids, spectra_grid, images_grid,
+                  axis_names, axis_units, b_axis_name, b_axis_unit,
+                  "\nRaw pre-processed data\n", 'b', 'plasma')
+
+    standard = rank1_standardization(data_tensor, *rank1_moments(data_tensor, True))
+    standard = masking(standard, axis_names, world_grids, param.outliers_mask)
+    outliers = abnormal_standardization(standard, param.outliers_sigma)
+
+    if param.show_verbose:
+
+        data_show(standard, world_grids, spectra_grid, images_grid,
+                  axis_names, axis_units, b_axis_name, b_axis_unit,
+                  "\nOutliers in pre-processed data\n", 'k', 'hot')
+    
+    noise_est = np.full_like(data_tensor, np.nan)
+    for loopback in range(1 + param.noise_loopback):
 
         if param.print_verbose and param.noise_loopback:
-            print("\x1B[1;35m" + f"\nEstimation loop: {noise_loop + 1}" + "\x1B[0m")
-
-        # Stellar spectrum estimation
-
-        if param.print_verbose:
-            print("\x1B[1;35m" + "\n    Stellar spectrum estimation" + "\x1B[0m")
-
-        D = masking_tool(data.reshape(data_tensor_shape).copy(), axis_names,
-                         world_grids, param.stellar_mask).reshape(data.shape)
-
-        s_est = stellar_spectrum_estimate(D)
-
-        if param.show_verbose:
-            show_dematricized(D.reshape(data_tensor_shape),
-                              pixels_axis_name, pixels_axis_unit,
-                              axis_names, axis_units, world_grids,
-                              "Stellar spectrum estimation\n", 'm', 'magma')
-
-        # Point Spread Function estimation
-
-        if param.print_verbose:
-            print("\x1B[1;35m" + "\n    Point Spread Function estimation" + "\x1B[0m")
-
-        D = masking_tool(data.reshape(data_tensor_shape).copy(), axis_names,
-                         world_grids, param.psf_mask).reshape(data.shape)
+            print("\x1B[1;35m" + f"\nLoop {loopback + 1}" + "\x1B[0m")
         
-        if param.show_verbose:
+        noise_est = estimation(data_tensor, world_grids, spectra_grid, images_grid,
+                               axis_names, axis_units, b_axis_name, b_axis_unit,
+                               outliers, param.star_mask, param.psf_mask,
+                               *rank1_moments(noise_est, loopback))
 
-            out = np.full_like(D, np.nan) # Default 'psf_est' value
-            where = (s_est != 0) & ~ np.isnan(s_est) # Divisibility
-            psf_est = np.divide(D, s_est, where = where, out = out)
-
-            show_dematricized(psf_est.reshape(data_tensor_shape),
-                              pixels_axis_name + " ratio", "no unit",
-                              axis_names, axis_units, world_grids,
-                              "Raw Point Spread Function estimation\n", 'y', 'cividis')
-
-        psf_est = point_spread_function_estimate(D, s_est, world_grids, covariances)
-
-        if param.show_verbose:
-            show_dematricized(psf_est.reshape(data_tensor_shape),
-                              pixels_axis_name + " ratio", "no unit",
-                              axis_names, axis_units, world_grids,
-                              "Regularized Point Spread Function estimation\n", 'y', 'cividis')
-
-        # Stellar component estimation
-
-        if param.print_verbose:
-            print("\x1B[1;35m" + "\n    Stellar component estimation" + "\x1B[0m")
-
-        S_est = stellar_component_estimate(psf_est, s_est)
-
-        if param.show_verbose:
-            show_dematricized(S_est.reshape(data_tensor_shape),
-                              pixels_axis_name, pixels_axis_unit,
-                              axis_names, axis_units, world_grids,
-                              "Stellar component estimation\n", 'r', 'inferno')
-
-        # Noise component estimation
-
-        E_est = data - S_est
-
-        if param.show_verbose:
-            show_dematricized(E_est.reshape(data_tensor_shape),
-                              pixels_axis_name, pixels_axis_unit,
-                              axis_names, axis_units, world_grids,
-                              "Noise component estimation\n", 'c', 'viridis')
-
-        if param.noise_loopback:
-            covariances = noise_covariance_estimate(E_est)
-
-    # Anomalies detection
-
-    if param.show_verbose and param.anomalies_sigmas:
-
-        anomalies_selection = E_est.reshape(data_tensor_shape).copy()
-
-        anomalies = outliers_pixels_estimate(anomalies_selection, axis_names, world_grids,
-                                             param.anomalies_sigmas, param.anomalies_mask)
+    if param.show_verbose:
         
-        anomalies_selection[ ~ anomalies] = np.nan
+        std_noise = rank1_standardization(noise_est, *rank1_moments(noise_est, True))
+        std_noise = masking(std_noise, axis_names, world_grids, param.anomalies_mask)
+        noise_est[~ abnormal_standardization(std_noise, param.anomalies_sigma)] = 0
 
-        show_dematricized(anomalies_selection,
-                          pixels_axis_name, pixels_axis_unit,
-                          axis_names, axis_units, world_grids,
-                          "Anomaly detection\n", 'g', 'viridis')
+        data_show(std_noise, world_grids, spectra_grid, images_grid,
+                  axis_names, axis_units, b_axis_name, b_axis_unit,
+                  "\nAnomalies in subtraction\n", 'g', 'viridis')
 
-    # Data matrix tensorization via
-    # devectorization of the first axes
-    
-    data_tensor = E_est.reshape(data_tensor.shape)
+    return noise_est
 
-    return data_tensor
-
-################################################################################################### Estimators
-
-def outliers_pixels_estimate(data_tensor: float_arr_type, axis_names: list[str],
-                             world_grids: list[tuple[list[int], float_arr_type]],
-                             standard_deviations: dict[str, int | float],
-                             mask: mask_type) -> np.typing.NDArray[np.bool]:
-    """ Outliers pixels detection
+def estimation(data_tensor: tensor_type, world_grids: w_grids_type,
+               spectra_grid: tensor_type, images_grid: tensor_type,
+               axis_names: list[str], axis_units: list[str],
+               b_axis_name: str, b_axis_unit: str,
+               mask: boolean_type, star_mask: mask_type, psf_mask: mask_type,
+               means: moment_type, stds: moment_type) -> tensor_type:
+    """ Stellar Subtraction - Estimation loop
     ---
 
-    Extraction of the outliers pixels, whether for their removal or their highlight:
+    Estimation of the noise component from the estimation of the stellar one
+
+    - Stellar spectrum estimation (by averaging the selected least noisy pixels)
+    - Point Spread Function estimation (through decomposition on Legendre basis)
+    - Stellar component estimation (from the stellar spectrum and PSF estimates)
     
-    - A pixel is an outlier when its pixel value deviates from the mean of the pixel values \\
-    by as many standard deviations of the pixel values as set in `standard_deviations`, \\
-    each time following the corresponding axis (for each entry of `standard_deviations`)
-
-    **Note:** The order of the `standard_deviations` entries can theoretically \\
-    impact the outliers actually detected, since these are identified axis by axis \\
-    (though, with a sufficient number of pixels, this is not supposed to happen)
-
     Args:
         data_tensor (np.typing.NDArray[np.float64]):
-            Data tensor from which to identify the outlier pixels
-        axis_names (list[str]):
-            Names of the different axes as extracted in the data header
+            Data from which to subtract the stellar component \\
+            The last axis of this tensor must be its only spectral axis
         world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
+            Grids of the world (physical) values along each of the different axis, \\
             grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
-        standard_deviations (dict[str, int | float], optional):
-            Numbers of standard deviations above the means above which the values of the pixels \\
-            classifie them as outliers (and lead to returning a `True` entry at their position), \\
-            for each given axis (as long as its name is found in the header via `axis_names`)
-        mask (dict[str, list[tuple[int | float, int | float]]], optional):
-            Lists of intervals between which pixels are ignored when searching for outliers, \\
-            for each given axis (as long as its name is found in the header via `axis_names`)
+            followed by the joint grid of the corresponding axes, in the same axis access order
+        axis_names (list[str]):
+            Names of the different axes as extracted in the data header \\
+            The spectral axis entry must be the panultimate one \\
+            (brightness axis entry being the ultimate one)
+        axis_units (list[str]):
+            Units of the different axes as extracted in the data header \\
+            The spectral axis entry must be the panultimate one \\
+            (brightness axis entry being the ultimate one)
+        b_axis_name (str):
+            Name of the brightness axis as extracted in the data header
+        b_axis_unit (str):
+            Unit of the brightness axis as extracted in the data header
+        mask (bool | np.typing.NDArray[np.bool]):
+            Array of pixels to be masked (replacing them with 'NaN' values), \\
+            for stellar spectrum and Point Spread Function estimates, \\
+            or 'False' to avoid masking anything pixel-by-pixel
+        star_mask (list[dict[str, tuple[int | float, int | float]]]):
+            Dictionnaries of intervals along multiples axes for which to mask \\
+            the pixels of the intersections (replacing them with 'NaN' values) \\
+            for stellar spectrum (but not Point Spread Function) estimate, \\
+            or '[]' to avoid masking anything interval-by-interval
+        psf_mask (list[dict[str, tuple[int | float, int | float]]]):
+            Dictionnaries of intervals along multiples axes for which to mask \\
+            the pixels of the intersections (replacing them with 'NaN' values) \\
+            for Point Spread Function (but not stellar spectrum) estimate, \\
+            or '[]' to avoid masking anything interval-by-interval
+        means (list[int | float, np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]]):
+            Estimation of the order 1 moments from rank 1 assumption \\
+            in the form of a list containing a common factor, the vectorized non-spectral part, \\
+            and lastly the spectral part (to multiply tensorially to reconstruct the rank 1 moment)
+        stds (list[int | float, np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]]):
+            Estimation of the square roots of the centered order 2 moments \\
+            in the form of a list containing a common factor, the vectorized non-spectral part, \\
+            and lastly the spectral part (to multiply tensorially to reconstruct the rank 1 moment)
 
     Returns:
-        outliers_pixels (np.typing.NDArray[np.bool]):
-            Mask identifying the outlier pixels
+        E_est (np.typing.NDArray[np.float64]):
+            Estimate of the noise component of the given data tensor
     """
+    
+    D = masking(data_tensor, world_grids, axis_names, star_mask, mask)
 
-    outliers_pixels = np.full_like(data_tensor, False, dtype = bool)
+    s_est = stellar_spectrum_estimate(D)
 
-    data_tensor = masking_tool(data_tensor, axis_names, world_grids, mask)
+    if param.show_verbose:
 
-    for axis_name, sigma in standard_deviations.items():
-        if axis_name not in axis_names: continue
-        axis_index = axis_names.index(axis_name)
+        data_show(D, world_grids, spectra_grid, images_grid,
+                  axis_names, axis_units, b_axis_name, b_axis_unit,
+                  "\nStellar spectrum estimation\n", 'm', 'inferno')
 
-        data_tensor = sigma_clip(data_tensor, sigma, cenfunc = 'mean', axis = axis_index)
+    D = masking(data_tensor, world_grids, axis_names, psf_mask, mask)
+    
+    if param.show_verbose:
 
-        outliers_pixels = data_tensor.mask
+        out = np.full_like(D, np.nan)
+        where = (s_est != 0) & ~ np.isnan(s_est)
+        ratio = np.divide(D, s_est, where = where, out = out)
 
-    if param.print_verbose:
-        outliers_number = np.count_nonzero(outliers_pixels)
-        if outliers_number:
-            print("\x1B[33m" + f"\n-- {outliers_number} outliers identified --" + "\x1B[0m")
+        data_show(ratio, world_grids, spectra_grid, images_grid,
+                  axis_names, axis_units, b_axis_name, b_axis_unit,
+                  "\nUnregularized PSF estimation\n", 'y', 'cividis')
 
-    return outliers_pixels
+    psf_est = psf_estimate(D, s_est, spectra_grid, means, stds)
 
-def stellar_spectrum_estimate(D: float_arr_type) -> float_arr_type:
+    if param.show_verbose:
+
+        data_show(psf_est, world_grids, spectra_grid, images_grid,
+                  axis_names, axis_units, b_axis_name, b_axis_unit,
+                  "\nRegularized PSF estimation\n", 'y', 'cividis')
+
+    S_est = stellar_component_estimate(s_est, psf_est)
+
+    if param.show_verbose:
+        
+        data_show(S_est, world_grids, spectra_grid, images_grid,
+                  axis_names, axis_units, b_axis_name, b_axis_unit,
+                  "\nStellar component estimation\n", 'r', 'magma')
+
+    E_est = data_tensor - S_est
+
+    if param.show_verbose:
+
+        data_show(E_est, world_grids, spectra_grid, images_grid,
+                  axis_names, axis_units, b_axis_name, b_axis_unit,
+                  "\nPost stellar subtraction data\n", 'c', 'cool')
+
+    return E_est
+
+################################################################################################### Estimation
+
+def stellar_spectrum_estimate(D: tensor_type) -> tensor_type:
     """ Stellar spectrum estimation
     ---
     
     Estimation of the spectrum of the main (stellar) component of the data, \\
-    by mean of the pixels whose spectrally integrated flux is greater than the threshold \\
+    by median of the pixels whose spectral median flux is greater than the threshold \\
     given by `param.stellar_level` (by comparing each of these fluxes with the maximum of them)
+
+    **Note:** Despite the stellar spectrum normally being given by total flux integration, \\
+    the median of the brightest pixels is preferred in this function for greater robustness, \\
+    knowing that there are multiplicative degenerations with the chromatic PSFs in any case
 
     Args:
         D (np.typing.NDArray[np.float64]):
-            Data matrix from which to estimate the stellar spectrum
+            Data tensor from which to estimate the stellar spectrum
 
     Returns:
         s_est (np.typing.NDArray[np.float64]):
-            Stellar spectrum estimate by mean of the selected pixels
+            Stellar spectrum estimate by median of the selected pixels
     """
 
+    if param.print_verbose:
+        print("\x1B[1;35m" + "\n    Stellar spectrum estimation" + "\x1B[0m")
+
     # Stellar positions selection
-    data_spectral_integration = np.nansum(D, axis = 1)
-    noise_level = np.nanmax(data_spectral_integration) / param.stellar_level
-    stellar_selection = noise_level <= data_spectral_integration
+    star_flux_max = np.nanmax(np.nanmedian(D, axis = -1))
+    noise_flux_level = star_flux_max / param.star_fluxlevel
+    selection = noise_flux_level <= np.nanmedian(D, axis = -1)
 
     # Stellar spectrum estimation
-    s_est = np.nansum(D[stellar_selection], axis = 0)
+    s_est = np.nanmedian(D[selection], axis = 0)
 
     # Masking for shows
-    if param.show_verbose:
-        D[~stellar_selection] = np.full(D.shape[1], np.nan)
+    if param.show_verbose: D[~ selection] = np.full(D.shape[-1], np.nan)
 
     return s_est
 
-def point_spread_function_estimate(D: float_arr_type, s_est: float_arr_type,
-                                   world_grids: list[tuple[list[int], float_arr_type]],
-                                   covariances: tuple_float_arr_type) -> float_arr_type:
+def psf_estimate(D: tensor_type, s_est: tensor_type, spectra_grid: tensor_type,
+                 means: moment_type, stds: moment_type) -> tensor_type:
     """ Point Spread Function estimation
     ---
 
     Estimation of the Point Spread Function matrix, \\
-    by factorizing the PSF matrix with one Legendre polynomial matrix, \\
+    by factorization of the PSF matrix with a Legendre polynomial matrix, \\
     on the features / spectral side (using the assumption of PSF smoothness in this direction)
 
     - The regularization that this factorization causes allows a much robust (yet biaised) \\
@@ -289,272 +274,358 @@ def point_spread_function_estimate(D: float_arr_type, s_est: float_arr_type,
     With this factorization and the assumption of a Gaussian noise, \\
     the maximum likehood estimate of the Point Spread Function matrix becomes:
 
-        D C_w Ms (Ms C_w Ms^T)^-1 Ms
+        (D - M1) M2^-1 Ls (Ls M2^-1 Ls^T)^-1 L
 
-    with `Ms` the matrix of Legendre polynomial modulation of the stellar spectrum estimate \\
-    and `C_w` the covariance matrix of the noise in the rows direction
+    with `Ls` the Legendre Orthogonal Polynomials of modulation of the stellar spectrum estimate \\
+    `M1` the mean of the noise and `M2` the covariance of the noise in the spectral direction
 
     Args:
         D (np.typing.NDArray[np.float64]):
             Data matrix from which to estimate the Point Spread Function
         s_est (np.typing.NDArray[np.float64]):
-            Stellar spectrum estimate by mean of the selected pixels \\
+            Stellar spectrum estimate by median of the selected pixels \\
             (with the `stellar_spectrum_estimate` function)
-        covariances (tuple[np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]):
-            Rows and columns noise covariances matrices estimates \\
-            (with the `noise_covariance_estimate` function) \\
-            or `np.nan` to indicate unestimated covariances
-        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
-            grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
+        spectra_grid (np.typing.NDArray[np.float64]):
+            Grid of the world (physical) values along the last (spectral) axis
+        means (list[int | float, np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]]):
+            Estimation of the order 1 moments from rank 1 assumption \\
+            in the form of a list containing a common factor, the vectorized non-spectral part, \\
+            and lastly the spectral part (to multiply tensorially to reconstruct the rank 1 moment)
+        stds (list[int | float, np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]]):
+            Estimation of the square roots of the centered order 2 moments \\
+            in the form of a list containing a common factor, the vectorized non-spectral part, \\
+            and lastly the spectral part (to multiply tensorially to reconstruct the rank 1 moment)
 
     Returns:
         psf_est (np.typing.NDArray[np.float64]):
-            Point Spread Function estimate with the S4 method
+            Point Spread Function estimate
     """
 
-    # Spectrum grid construction
-    # (averaging along correlated non-rows axes)
-    non_rows_grid_axes = list(range(len(world_grids[-1][0])))
-    del non_rows_grid_axes[world_grids[-1][0].index(len(world_grids)-1)]
-    rows_grid = np.nanmean(world_grids[-1][1].T, axis = tuple(non_rows_grid_axes))
+    if param.print_verbose:
+        print("\x1B[1;35m" + "\n    Point Spread Function estimation" + "\x1B[0m")
 
-    # Shift of the 'rows_grid' in the Legendre [-1,1] range
-    legendre_grid = 2 * (rows_grid - min(rows_grid)) / (max(rows_grid) - min(rows_grid)) - 1
+    # Masking of the 'NaN' and '0' pixels of 's_est'
+    spectra_mask = ~ (np.isnan(s_est) | (s_est == 0))
+    # Masking of the 'NaN' pixels of the spectral std
+    spectra_mask &= ~ np.all(np.isnan(stds[2]), axis = 0)
+    # Masking of the spectral channels of 'D' full of 'NaN'
+    non_spectra_axes = tuple(axis for axis in range(D.ndim - 1))
+    spectra_mask &= ~ np.all(np.isnan(D), axis = non_spectra_axes)
 
-    # Matrix of the Legendre polynomials
-    # by following Bonnet's recursion formula
-    # -> (n+1)Pn+1(x) = (2n+1)xPn(x) - nPn-1(x)
-    lower_spectral_dimension = param.psf_degree + 1
-    M = np.tile(legendre_grid, (lower_spectral_dimension, 1))
-    M[0] = 1 # Degree 0 (total flux) Legendre polynomial
-    for i in range(2, param.psf_degree + 1):
-        M[i] *= M[i-1] * (2 * i - 1) / i
-        M[i] -= M[i-2] * (i - 1) / i
-
-    # Matrix of the Legendre polynomial modulation
-    # of the stellar spectrum estimate 's_est'
-    M_s_est = M * s_est
-
-    # 'NaN' and '0' pixels of 's_est' masking
-    s_est_mask = ~ (np.isnan(s_est) | (s_est == 0))
-    # Data 'D' matrix columns full of 'NaN' masking
-    all_nan_D_sheets = ~ np.all(np.isnan(D), axis = 0)
-    cols_masking = all_nan_D_sheets & s_est_mask
-
-    # Scaling of the first row (regressor) to unit norm
-    # so that it weights as the others in the regression
-    # (it is 's_est' as the 1st legendre polynomial is 1)
-    regressor_0_norm = np.linalg.norm(s_est[cols_masking])
-    M_s_est[0] /= regressor_0_norm
-    M[0] /= regressor_0_norm
-    # Orthogonalization of variation rows with the (first) total flux row
-    # (inevitably fully correlated because of the multiplication with 's_est')
-    # so that it comes '<M_s_est_ortho[i],M_s_est[0]> = M_s_est_ortho[i].T.s_est
-    # is equal to '(M_s_est[i]-(<M_s_est[i],s_est>/<s_est,s_est>) s_est).T.s_est'
-    # and 'M_s_est[i].T.s_est-(M_s_est[i].T.s_est/s_est.T.s_est) s_est.T.s_est'
-    # and 'M_s_est[i].T.s_est-M_s_est[i].T.s_est = 0' hence the orthogonality
-    # 'M' is subtracted in a way it keeps the same relation with 'M_s_est'
-    colinearity = M_s_est[1:, cols_masking] @ s_est[cols_masking].T
-    normalization_s_est = s_est[cols_masking] @ s_est[cols_masking].T
-    normalized_colinearity = colinearity / normalization_s_est
-    M_s_est[1:] -= normalized_colinearity[:, None] * s_est
-    M[1:] -= normalized_colinearity[:, None]
-    # Scaling of all other rows (regressors) to unit norms
-    # so that each one of them weight equally in the regression
-    regressors_norms = np.linalg.norm(M_s_est[1:, cols_masking], axis = 1)
-    M_s_est[1:] /= regressors_norms[:, None]
-    M[1:] /= regressors_norms[:, None]
+    L, L_s_est = legendre_modulation_matrix(spectra_grid[0], s_est, spectra_mask)
 
     # Data 'D' matrix 'NaN' values zeroing
-    all_nan_D_spaxels = np.all(np.isnan(D), axis = 1)
+    all_nan_D_spaxels = np.all(np.isnan(D), axis = -1)
     D[np.isnan(D)] = 0 # For the matrix multiplications
     
-    # Precision matrix weighting
-    if covariances[0] is np.nan: covariances[0] = np.identity(D.shape[1])
-    cols_masking = cols_masking & ~ np.all(np.isnan(covariances[0]), axis = 0)
-    masked_rows_covariance = covariances[0][cols_masking, :][:, cols_masking]
-    rows_precision_matrix = np.linalg.inv(masked_rows_covariance)
-    M_s_est = M_s_est[:, cols_masking]
+    # Data 'D' matrix 'NaN' values zeroing
+    rank1_mean = means[0] * np.outer(means[1], means[2])
+    spectral_cov_inv = np.linalg.inv(np.diag(stds[2]))
 
-    # Matrix of orthogonal projection onto the column space of 'M_s_est'
-    # 'M_s_est' is well conditionned as based on the Legendre polynomials
-    # Orthogonality could also ease constraining based on physical priors
-    M_s_est_Gram_matrix = M_s_est @ rows_precision_matrix @ M_s_est.T
-    Pi_M_s_est = M_s_est.T @ np.linalg.inv(M_s_est_Gram_matrix)
+    # Masking and standardization of the data 'D' and Legendre matrix 'L_s_est'
+    D = (D - rank1_mean.reshape(D.shape))[..., spectra_mask] @ spectral_cov_inv[spectra_mask]
+    L_s_est_tilde = L_s_est[:, spectra_mask] @ spectral_cov_inv[spectra_mask, :][:, spectra_mask]
 
-    # Estimation of the Legendre polynomial coefficients of the data decomposition
-    coeffs_est = D[:, cols_masking] @ rows_precision_matrix @ Pi_M_s_est
-    # Reset to 'NaN' of the data spaxels full of 'NaN'
-    coeffs_est[all_nan_D_spaxels] = np.nan
+    # Generalized inverse 'L_s_est_plus' of the Legendre matrix 'L_s_est'
+    # 'L_s_est' is well conditionned as based on Legendre Orthogonal Polynomials
+    L_s_est_plus = L_s_est_tilde.T @ np.linalg.inv(L_s_est_tilde @ L_s_est_tilde.T)
 
     # Estimation of the PSF
-    psf_est = coeffs_est @ M
+    psf_est = np.tensordot(D[..., spectra_mask], L_s_est_plus @ L , axes = ([-1], [0]))
+    # Reset to 'NaN' of the data spaxels full of 'NaN'
+    psf_est[all_nan_D_spaxels] = np.nan
 
     # Save of the Legendre coefficients
     # being a reduced estimate of the PSF
     if param.save_verbose:
+
+        # Estimation of the Legendre Orthogonal Polynomial coefficients of the data decomposition
+        coeffs_est = np.tensordot(D[..., spectra_mask], L_s_est_plus, axes = ([-1], [0]))
+        # Reset to 'NaN' of the data spaxels full of 'NaN'
+        coeffs_est[all_nan_D_spaxels] = np.nan
+
         # Coefficients normalization (for homogeneous comparisons)
-        coeffs_normalization = np.linalg.norm(D[:, cols_masking], axis = 1)[:, None]
+        coeffs_normalization = np.linalg.norm(D[..., spectra_mask], axis = -1)[..., None]
         coeffs_normalization[np.isnan(coeffs_normalization) | (coeffs_normalization == 0)] = 1
         # Save of the normalized coefficients representing the reduced PSF
         np.save("PSF.npy", coeffs_est / coeffs_normalization)
 
     return psf_est
 
-def stellar_component_estimate(psf_est: float_arr_type, s_est: float_arr_type) -> float_arr_type:
+def stellar_component_estimate(s_est: tensor_type, psf_est: tensor_type) -> tensor_type:
     """ Stellar component estimation
     ---
 
-    Estimation of the stellar component of the data following the model,\\
+    Estimation of the stellar component of the data following the model, \\
     by multiplication of the PSF estimate with the stellar spectrum estimate
 
     Args:
-        psf_est (np.typing.NDArray[np.float64]):
-            Point Spread Function matrix estimate with the S3, S4 or S5 method \\
-            (i.e. with one of the functions `point_spread_function_estimate_S3`, \\
-            `point_spread_function_estimate_S4` or `point_spread_function_estimate_S5` \\)
         s_est (np.typing.NDArray[np.float64]):
-            Stellar spectrum estimate by mean of the selected pixels \\
+            Stellar spectrum estimate by median of the selected pixels \\
             (with the `stellar_spectrum_estimate` function)
+        psf_est (np.typing.NDArray[np.float64]):
+            PSF estimate by polynomial modulation of the stellar spectrum estimate \\
+            (with the `psf_estimate` and `legendre_modulation_matrix` functions)
 
     Returns:
         S_est (np.typing.NDArray[np.float64]):
             Stellar component estimate
     """
 
+    if param.print_verbose:
+        print("\x1B[1;35m" + "\n    Stellar component estimation" + "\x1B[0m")
+
     S_est = psf_est * s_est
 
     return S_est
 
-def noise_covariance_estimate(E_est: float_arr_type) -> tuple[float_arr_type, float_arr_type]:
-    """ Rows and columns noise covariances matrices estimation
+################################################################################################### Factorization
+
+def legendre_modulation_matrix(world_grid: tensor_type, s_est: tensor_type,
+                               mask: boolean_type) -> tuple[tensor_type, tensor_type]:
+    """ Matrix of the Legendre Orthogonal Polynomials
     ---
 
-    Estimation of the covariance matrices `C` from `np.cov`, \\
-    then with optimal shrinkage towards the corresponding diagonal matrix with:
-
-        tr(C²) + tr²(C) - 2 tr(C) ☉ tr(C)
-        ---------------------------------- (Flasseur et al. 2018a)
-          | C | (tr(C²) - tr(C) ☉ tr(C))
-
-    with `tr` the trace operator, `☉` the entry-wise Hadamard product  \\
-    and `| . |` the number of samples used for the estimation of C
+    Matrix containing the successive Legendre polynomials on its different rows \\
+    and its row-by-row multiplication by the stellar spectrum estimate, \\
+    in order to modulate this latter robustly thanks to \\
+    the orthogonality of the built basis
 
     Args:
-        E_est (np.typing.NDArray[np.float64]):
-            Noise component matrix estimate by subtraction of the stellar component matrix estimate
-
-    Raises:
-        ValueError:
-            Impossible shrinkage if the rows covariance matrix is only 0 outside of the diagonal \\
-            (and in any case, not only does weighting become unnecessary, \\
-            but it is also very likely a sign that something has gone wrong)
-        ValueError:
-            Impossible shrinkage if the cols covariance matrix is only 0 outside of the diagonal \\
-            (and in any case, not only does weighting become unnecessary, \\
-            but it is also very likely a sign that something has gone wrong)
+        world_grid (np.typing.NDArray[np.float64]):
+            Grid shifted in the [-1,1] range for the Legendre polynomials sampling
+        s_est (np.typing.NDArray[np.float64]):
+            Stellar spectrum estimate by median of the selected pixels \\
+            (with the `stellar_spectrum_estimate` function)
+        mask (np.bool | np.typing.NDArray[np.bool]):
+            Spectral channels of the `s_est` spectrum to disregard \\
+            during the matrices scaling and orthogonalization
 
     Returns:
-        noise_covariances (tuple[np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]]):
-            Rows and columns noise covariances matrices estimates
+        L (np.typing.NDArray[np.float64]):
+            Matrix of the Legendre Orthogonal Polynomials
+        L_s_est (np.typing.NDArray[np.float64]):
+            Matrix of the Legendre Orthogonal Polynomials \\
+            of modulation of the stellar spectrum estimate `s_est`
+    """
+    
+    # Shift of the 'world_grid' in the Legendre [-1,1] range
+    legendre_grid = 2 * (world_grid - min(world_grid)) / (max(world_grid) - min(world_grid)) - 1
+
+    # Matrix of the Legendre polynomials
+    # by following Bonnet's recursion formula
+    # -> (n+1)Pn+1(x) = (2n+1)xPn(x) - nPn-1(x)
+    lower_spectral_dimension = param.psf_polydegree + 1
+    L = np.tile(legendre_grid, (lower_spectral_dimension, 1))
+    L[0] = 1 # Degree 0 (total flux) Legendre polynomial
+    for i in range(2, param.psf_polydegree + 1):
+        L[i] *= L[i-1] * (2 * i - 1) / i
+        L[i] -= L[i-2] * (i - 1) / i
+
+    # Matrix of the Legendre polynomial modulation
+    # of the stellar spectrum estimate 's_est'
+    L_s_est = L * s_est
+
+    # Scaling of the first row (regressor) to unit norm
+    # so that it weights as the others in the regression
+    # (it is 's_est' as the 1st legendre polynomial is 1)
+    regressor_0_norm = np.linalg.norm(s_est[mask])
+    L_s_est[0] /= regressor_0_norm
+    L[0] /= regressor_0_norm
+    # Orthogonalization of variation rows with the (first) total flux row
+    # (inevitably fully correlated because of the multiplication with 's_est')
+    # so that it comes '<L_s_est_ortho[i],L_s_est[0]> = L_s_est_ortho[i].T.s_est
+    # is equal to '(L_s_est[i]-(<L_s_est[i],s_est>/<s_est,s_est>) s_est).T.s_est'
+    # and 'L_s_est[i].T.s_est-(L_s_est[i].T.s_est/s_est.T.s_est) s_est.T.s_est'
+    # and 'L_s_est[i].T.s_est-L_s_est[i].T.s_est = 0' hence the orthogonality
+    # 'L' is subtracted in a way it keeps the same relation with 'L_s_est'
+    colinearity = L_s_est[1:, mask] @ s_est[mask].T
+    normalization_s_est = s_est[mask] @ s_est[mask].T
+    normalized_colinearity = colinearity / normalization_s_est
+    L_s_est[1:] -= normalized_colinearity[:, None] * s_est
+    L[1:] -= normalized_colinearity[:, None]
+    # Scaling of all other rows (regressors) to unit norms
+    # so that each one of them weight equally in the regression
+    regressors_norms = np.linalg.norm(L_s_est[1:, mask], axis = 1)
+    L_s_est[1:] /= regressors_norms[:, None]
+    L[1:] /= regressors_norms[:, None]
+
+    return L, L_s_est
+
+################################################################################################### Statistics
+
+def rank1_moments(data_tensor: tensor_type, svd: bool | int) -> tuple[moment_type, moment_type]:
+    """ Rank1 means and standard deviations estimation
+    ---
+
+    Estimation, with rank 1 assumptions, of the means (order 1 moments) \\
+    and standard deviations (square roots of the centered order 2 moments)
+
+    **Note:** To avoid the extremely costly calculation of all data pixel covariances \\
+    (followed by rank 1 "non-spectral x spectral" decomposition by SVD as for the mean), \\
+    only pixel variances are considered (inter-pixel covariances being close to zero anyway), \\
+    approximated empirically axis by axis (despite the inaccuracy by a factor that this means), \\
+    and via their square roots directly (being the ones used in the standardization calculations)
+
+    Args:
+        data_tensor (np.typing.NDArray[np.float64]):
+            Data from which to estimate the rank 1 moments \\
+            The last axis of this tensor must be its only spectral axis
+        svd (bool | int):
+            Activation of rank 1 moments calculation from SVD, \\
+            on data vectorized along the non-spectral axes \\
+            (default zero and identity matrices else)
+
+    Returns:
+        means (list[int | float, np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]]):
+            Estimation of the order 1 moments from rank 1 assumption \\
+            in the form of a list containing a common factor, the vectorized non-spectral part, \\
+            and lastly the spectral part (to multiply tensorially to reconstruct the rank 1 moment)
+        stds (list[int | float, np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]]):
+            Estimation of the square roots of the centered order 2 moments \\
+            in the form of a list containing a common factor, the vectorized non-spectral part, \\
+            and lastly the spectral part (to multiply tensorially to reconstruct the rank 1 moment)
     """
 
-    E_est[np.isnan(E_est)] = 0
+    data_tensor_shape = data_tensor.shape
 
-    n_rows, n_cols = E_est.shape
+    if svd:
+        data_tensor[np.isnan(data_tensor)] = 0
 
-    # Rows covariance matrix
+        vectors = data_tensor.reshape(-1, data_tensor_shape[-1])
+        left_sv, sv, right_sv_T = np.linalg.svd(vectors, full_matrices = False)
 
-    C_rows = np.cov(E_est, rowvar = False)
+        means = [sv[0], left_sv[:, 0], right_sv_T[0, :]]
+        vectors -= means[0] * np.outer(means[1], means[2])
 
-    squared_trace_C_rows = np.trace(C_rows) **2
-    trace_squared_C_rows = np.trace(C_rows @ C_rows)
-    sum_diag_squared_C_rows = np.sum(np.diag(C_rows)**2)
+        stds = [1, np.std(vectors, axis = 1), np.std(vectors, axis = 0)]
 
-    if trace_squared_C_rows - sum_diag_squared_C_rows == 0:
-        error_message = "Zero covariances: shrinkage impossible"
-        error_message += " (and noise statistics weighting thus useless anyway)"
-        error_message += " > Something wrong probably happened during this estimation loop"
-        raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+    else:
+        means = [1, np.zeros(np.prod(data_tensor_shape[:-1])), np.zeros(data_tensor_shape[-1])]
+        stds = [1, np.ones(np.prod(data_tensor_shape[:-1])), np.ones(data_tensor_shape[-1])]
 
-    rows_shrinkage = squared_trace_C_rows + trace_squared_C_rows - 2*sum_diag_squared_C_rows
-    rows_shrinkage /= (n_cols + 1) * (trace_squared_C_rows - sum_diag_squared_C_rows)
+    return means, stds
 
-    C_rows = (1 - rows_shrinkage) * C_rows + rows_shrinkage * np.diag(np.diag(C_rows))
+def rank1_standardization(data_tensor: tensor_type,
+                          means: moment_type, stds: moment_type) -> tensor_type:
+    """ Data standardization with rank 1 mean and rank 1 standard deviation
+    ---
 
-    # Columns covariance matrix
+    Subtraction of a rank 1 mean estimate and division by a rank 1 standard deviation estimate \\
+    (the rank 1 separation being between the non-spectral and spectral axes)
 
-    C_cols = np.cov(E_est, rowvar = True)
+    Args:
+        data_tensor (np.typing.NDArray[np.float64]):
+            Data tensor from which to standardized the spaxels \\
+            The last axis of this tensor must be its (only) spectral axis
+        means (list[int | float, np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]]):
+            Estimation of the order 1 moments from rank 1 assumption \\
+            in the form of a list containing a common factor, the vectorized non-spectral part, \\
+            and lastly the spectral part (to multiply tensorially to reconstruct the rank 1 moment)
+        stds (list[int | float, np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]]):
+            Estimation of the square roots of the centered order 2 moments \\
+            in the form of a list containing a common factor, the vectorized non-spectral part, \\
+            and lastly the spectral part (to multiply tensorially to reconstruct the rank 1 moment)
 
-    squared_trace_C_cols = np.trace(C_rows) **2
-    trace_squared_C_cols = np.trace(C_rows @ C_rows)
-    sum_diag_squared_C_cols = np.sum(np.diag(C_rows)**2)
+    Returns:
+        standardized_data (np.typing.NDArray[np.float64]):
+            Data tensor from which the spaxels have been standardized with rank 1 moments
+    """
 
-    if trace_squared_C_cols - sum_diag_squared_C_cols == 0:
-        error_message = "Zero covariances: shrinkage impossible"
-        error_message += " (and noise statistics weighting thus useless anyway)"
-        error_message += " > Something wrong probably happened during this estimation loop"
-        raise ValueError("\x1B[31m" + error_message + "\x1B[0m")
+    rank1_mean = means[0] * np.outer(means[1], means[2]).reshape(data_tensor.shape)
+    rank1_std = stds[0] * np.outer(stds[1], stds[2]).reshape(data_tensor.shape)
+    
+    out = np.full_like(data_tensor, np.nan)
+    where = (rank1_std != 0) & ~ np.isnan(rank1_std)
 
-    cols_shrinkage = squared_trace_C_cols + trace_squared_C_cols - 2*sum_diag_squared_C_cols
-    cols_shrinkage /= (n_rows + 1) * (trace_squared_C_cols - sum_diag_squared_C_cols)
+    standardized_data = np.divide(data_tensor - rank1_mean, rank1_std, out = out, where = where)
 
-    C_cols = (1 - cols_shrinkage) * C_cols + cols_shrinkage * np.diag(np.diag(C_cols))
+    return standardized_data
 
-    # Covariance matrices grouping
+def abnormal_standardization(data_tensor: tensor_type,
+                             sigmas: int | float) -> boolean_type:
+    """ Abnormal pixels extraction
+    ---
 
-    noise_covariances = (C_rows, C_cols)
+    Extraction of abnormal pixels, whether along the spectral or non-spectral axes, \\
+    abnormalily being when a value deviates from the mean of the pixel values \\
+    by more standard deviations of the pixel values than fixed by `sigmas`
 
-    return noise_covariances
+    **Note:** The non-abnormal pixels are directly filled with 'NaN' values
+
+    Args:
+        data_tensor (np.typing.NDArray[np.float64]):
+            Data tensor from which to identify the abnormal pixels
+        sigmas (int | float):
+            Numbers of standard deviations above the mean above which the values of the pixels \\
+            classifie them as abnormal (leading to a `True` entry at their position)
+            
+    Returns:
+        abnormal_pixels (bool | np.typing.NDArray[np.bool]):
+            Mask identifying the abnormal pixels
+    """
+
+    non_spectral = tuple(axis for axis in range(data_tensor.ndim - 1))
+
+    data_tensor[..., np.all(np.isnan(data_tensor), axis = non_spectral)] = 0
+    non_spectral_deviations = np.abs(data_tensor - np.nanmean(data_tensor, axis = non_spectral))
+    abnormal_pixels = non_spectral_deviations > sigmas*np.nanstd(data_tensor, axis = non_spectral)
+    data_tensor[..., np.all(data_tensor == 0, axis = non_spectral)] = np.nan
+
+    data_tensor[np.all(np.isnan(data_tensor), axis = -1)] = 0
+    spectral_deviations = np.abs(data_tensor - np.nanmean(data_tensor, axis = -1)[..., None])
+    abnormal_pixels &= spectral_deviations > sigmas*np.nanstd(data_tensor, axis = -1)[..., None]
+    data_tensor[np.all(data_tensor == 0, axis = -1)] = np.nan
+
+    data_tensor[~ abnormal_pixels] = np.nan
+
+    return abnormal_pixels
 
 ################################################################################################### Tools
 
-def masking_tool(data_tensor: float_arr_type, axis_names: list[str],
-                 world_grids: list[tuple[list[int], float_arr_type]],
-                 intervals_to_be_masked: mask_type) -> float_arr_type:
-    """ Masking tool - replacements with NaN values
+def masking(data_tensor: tensor_type, world_grids: w_grids_type, axis_names: list[str],
+            intervals: mask_type = [], pixels: boolean_type = False) -> tensor_type:
+    """ Masking tool - replacements with 'NaN' values
     ---
 
-    Replacement of pixel values of a data tensor with the NaN value (to mask these pixels), \\
-    on the intersection of different given intervals along different given axes
-
-    **Note:** If no interval is specified, `data_tensor` is returned as is \\
-    thanks to `max(1, np.max(pixels_to_be_masked)))` \\
-    instead of `np.max(pixels_to_be_masked)`
+    Replacement of pixel values of a data tensor with the 'NaN' value, \\
+    on the intersections of different given intervals along different given axes
 
     Args:
         data_tensor (np.typing.NDArray[np.float64]):
             Data tensor for which the given intervals have to masked
+        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
+            Grids of the world (physical) values along each of the different axis, \\
+            grouped by correlated axes so that each tuple contains a list of axis indexes \\
+            followed by the joint grid of the corresponding axes, in the same axis access order
         axis_names (list[str]):
             Names of the different axes as extracted in the data header
-        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
-            grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
-        intervals_to_be_masked (dict[str, list[tuple[int | float, int | float]]]):
-            List of intervals between which pixels are replaced by NaN values after intersection \\
-            for each given axis (as long as its name is found in the header via `axis_names`)
+        intervals (list[dict[str, tuple[int | float, int | float]]], optionnal):
+            Dictionnaries of intervals along multiples axes for which to mask \\
+            the pixels of the intersections (replacing them with 'NaN' values), \\
+            or '[]' by default to avoid masking anything interval-by-interval
+        pixels (bool | np.typing.NDArray[np.bool], optionnal):
+            Array of pixels to be masked (replacing them with 'NaN' values), \\
+            or 'False' by default to avoid masking anything pixel-by-pixel
 
     Returns:
-        data_tensor (np.typing.NDArray[np.float64]):
-            Masked data tensor, i.e. with NaN at the intersection of the given intervals
+        masked_data_tensor (np.typing.NDArray[np.float64]):
+            Masked data tensor, i.e. with 'NaN' at the given pixels and intervals
     """
 
-    for interval_to_be_masked in intervals_to_be_masked:
+    masked_data_tensor = data_tensor.copy()
 
-        pixels_to_be_masked = np.zeros_like(data_tensor) # To identify the intersection
+    for interval in intervals:
 
-        for axis_name, (lower_bound, upper_bound) in interval_to_be_masked.items():
+        intersections = np.zeros_like(data_tensor)
+
+        for axis_name, (lower_bound, upper_bound) in interval.items():
 
             if axis_name not in axis_names: continue
             axis_index = axis_names.index(axis_name)
 
-            non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
-            del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
-            axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
-
+            axis_grid = joint_grid([axis_index], world_grids)[0]
+           
             if isinstance(lower_bound, float):
                 if axis_grid[0] < axis_grid[-1]:
                     lower_bound = np.searchsorted(axis_grid, lower_bound, side = 'right') - 1
@@ -566,19 +637,20 @@ def masking_tool(data_tensor: float_arr_type, axis_names: list[str],
 
             if lower_bound > upper_bound: lower_bound, upper_bound = upper_bound, lower_bound
 
-            slicer = pixels_to_be_masked.ndim * [slice(None)]
+            slicer = intersections.ndim * [slice(None)]
             slicer[axis_index] = slice(lower_bound, upper_bound)
-            pixels_to_be_masked[tuple(slicer)] += 1
+            intersections[tuple(slicer)] += 1 # To identify the intersection
 
-        masks_intersection = (pixels_to_be_masked == max(1, np.max(pixels_to_be_masked)))
+        mask_intersections = (intersections == max(1, np.max(intersections)))
 
-        data_tensor[masks_intersection] = np.nan
+        masked_data_tensor[mask_intersections] = np.nan
 
-    return data_tensor
+    masked_data_tensor[pixels] = np.nan
 
-def filtering_tool(data_tensor: float_arr_type, axis_names: list[str],
-                   world_grids: list[tuple[list[int], float_arr_type]],
-                   loc_scale_filter_list: mask_type) -> float_arr_type:
+    return masked_data_tensor
+
+def filtering(data_tensor: tensor_type, world_grids: w_grids_type,
+              axis_names: list[str], filters: mask_type) -> tensor_type:
     """ Filtering tool - multiplication with unit-height Gaussians
     ---
 
@@ -594,37 +666,37 @@ def filtering_tool(data_tensor: float_arr_type, axis_names: list[str],
         data_tensor (np.typing.NDArray[np.float64]):
             Data tensor for which the pixels values have to be multiplied \\
             with Gaussians at the given locations and scales parameters
+        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
+            Grids of the world (physical) values along each of the different axis, \\
+            grouped by correlated axes so that each tuple contains a list of axis indexes \\
+            followed by the joint grid of the corresponding axes, in the same axis access order
         axis_names (list[str]):
             Names of the different axes as extracted in the data header
-        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
-            grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
-        loc_scale_filter_list (mask_type):
+        filters (mask_type):
             List of locations and scales of Gaussians to sum to build a global filter \\
             for each given axis (as long as its name is found in the header via `axis_names`)
 
     Returns:
-        data_tensor (np.typing.NDArray[np.float64]):
+        filtered_data_tensor (np.typing.NDArray[np.float64]):
             Filtered data tensor, i.e. mutliplied with the products of the sums\\
             of unitary-height Gaussians at the given locations and scales
     """
 
     gaussian = lambda grid, loc, scale: np.exp(-1/2 * ((grid-loc) / scale)**2)
 
-    for loc_scale_filter_dict in loc_scale_filter_list:
+    filtered_data_tensor = data_tensor.copy()
+
+    for filter in filters:
 
         global_filter = np.ones_like(data_tensor)
 
-        for axis_name, (loc_filter, scale_filter) in loc_scale_filter_dict.items():
+        for axis_name, (loc_filter, scale_filter) in filter.items():
 
             if axis_name not in axis_names: continue
             axis_index = axis_names.index(axis_name)
 
-            non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
-            del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
-            axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
-
+            axis_grid = joint_grid([axis_index], world_grids)[0]
+           
             if isinstance(loc_filter, int):
                 loc_filter = axis_grid[loc_filter]
             if isinstance(scale_filter, int):
@@ -640,13 +712,12 @@ def filtering_tool(data_tensor: float_arr_type, axis_names: list[str],
 
             global_filter *= gaussian(axis_grid, loc_filter, scale_filter).reshape(shape)
 
-        data_tensor *= global_filter
+        filtered_data_tensor *= global_filter
 
-    return data_tensor
+    return filtered_data_tensor
 
-def hindering_tool(data_tensor: float_arr_type, axis_names: list[str],
-                   world_grids: list[tuple[list[int], float_arr_type]],
-                   loc_scale_hinder_list: mask_type) -> float_arr_type:
+def hindering(data_tensor: tensor_type, world_grids: w_grids_type,
+                   axis_names: list[str], hinders: mask_type) -> tensor_type:
     """ Hindering tool - multiplication with reversed unit-height Gaussians
     ---
 
@@ -665,38 +736,38 @@ def hindering_tool(data_tensor: float_arr_type, axis_names: list[str],
         data_tensor (np.typing.NDArray[np.float64]):
             Data tensor for which the pixels values have to be multiplied \\
             with Gaussians at the given locations and scales parameters
+        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
+            Grids of the world (physical) values along each of the different axis, \\
+            grouped by correlated axes so that each tuple contains a list of axis indexes \\
+            followed by the joint grid of the corresponding axes, in the same axis access order
         axis_names (list[str]):
             Names of the different axes as extracted in the data header
-        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
-            grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
-        loc_scale_filter_list (mask_type):
+        hinders (mask_type):
             List of locations and scales of Gaussians to sum to build a global reversed hinder \\
             for each given axis (as long as its name is found in the header via `axis_names`), \\
             itself subtracted from the unit-arrays to build the global hinder ultimately used
 
     Returns:
-        data_tensor (np.typing.NDArray[np.float64]):
+        hindered_data_tensor (np.typing.NDArray[np.float64]):
             Hindered data tensor, i.e. mutliplied with from unit-arrays minus \\
             the products of the sums of unitary-height Gaussians at the given locations and scales
     """
 
     gaussian = lambda grid, loc, scale: np.exp(-1/2 * ((grid-loc) / scale)**2)
 
-    for loc_scale_hinder_dict in loc_scale_hinder_list:
+    hindered_data_tensor = data_tensor.copy()
+
+    for hinder in hinders:
 
         global_reversed_hinder = np.ones_like(data_tensor)
 
-        for axis_name, (loc_hinder, scale_hinder) in loc_scale_hinder_dict.items():
+        for axis_name, (loc_hinder, scale_hinder) in hinder.items():
 
             if axis_name not in axis_names: continue
             axis_index = axis_names.index(axis_name)
 
-            non_axis_grid_axes = list(range(len(world_grids[axis_index][0])))
-            del non_axis_grid_axes[world_grids[axis_index][0].index(axis_index)]
-            axis_grid = np.mean(world_grids[axis_index][1].T, axis = tuple(non_axis_grid_axes))
-
+            axis_grid = joint_grid([axis_index], world_grids)[0]
+           
             if isinstance(loc_hinder, int):
                 loc_hinder = axis_grid[loc_hinder]
             if isinstance(scale_hinder, int):
@@ -715,104 +786,193 @@ def hindering_tool(data_tensor: float_arr_type, axis_names: list[str],
         global_hinder = np.max(global_reversed_hinder)*np.ones_like(global_reversed_hinder)
         global_hinder -= global_reversed_hinder
 
-        if global_hinder.any(): data_tensor *= global_hinder
+        if global_hinder.any(): hindered_data_tensor *= global_hinder
 
-    return data_tensor
+    return hindered_data_tensor
 
-################################################################################################### Display
+################################################################################################### Figures
 
-def show_dematricized(dematricized_data: float_arr_type,
-                      pixels_axis_name: str, pixels_axis_unit: str,
-                      axis_names: list[str], axis_units: list[str],
-                      world_grids: list[tuple[list[int], float_arr_type]],
-                      suptitle: str = "", color: str = 'k', cmap: str = 'binary') -> None:
-    """ Dematricized data shows - images and spectra means
+def data_show(data_tensor: tensor_type, world_grids: w_grids_type,
+              spectra_grid: tensor_type, images_grid: tensor_type,
+              axis_names: list[str], axis_units: list[str],
+              b_axis_name: str, b_axis_unit: str,
+              title: str, color: str, cmap: str):
+    """ Data show - images and spectra means
     ---
-
-    Show of a mean spectrum (along the last axis) and of a mean image (along the two first axes) \\
-    of the dematricized data, for monitoring purposes, with labels/units extracted from the header
+ 
+    Mean spectrum (along the last axis) and mean image (along the two first axes)
 
     Args:
-        dematricized_data (np.typing.NDArray[np.float64]):
-            Dematricized data matrix for which a mean spectrum and a mean image must be shown
-        pixels_axis_name (str):
-            Name of the pixel axis values as extracted in the data header \\
-            (or specifically modified depending on the type of data displayed)
-        pixels_axis_unit (str):
-            Unit of the pixel axis values as extracted in the data header \\
-            (or specifically modified depending on the type of data displayed)
+        data_tensor (np.typing.NDArray[np.float64]):
+            Data tensor for which to show a mean spectrum and a mean image
+        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
+            Grids of the world (physical) values along each of the different axis, \\
+            grouped by correlated axes so that each tuple contains a list of axis indexes \\
+            followed by the joint grid of the corresponding axes, in the same axis access order
+        spectra_grid (np.typing.NDArray[np.float64]):
+            Grid of the world (physical) values along the last (spectral) axis
+        images_grid (np.typing.NDArray[np.float64]):
+            Grid of the world (physical) values along the two first axis
         axis_names (list[str]):
-            Names of the different axes as extracted in the data header
+            Names of the different axes as extracted in the data header \\
+            The spectral axis entry must be the ultimate one
         axis_units (list[str]):
             Units of the different axes as extracted in the data header \\
-            or as choosen in `param.zooms_units`
-        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
-            Grids of the world (physical) values of the different axis, \\
-            grouped by correlated axes so that each tuple contains a list of axis indexes \\
-            followed by the grid of the corresponding axes, in the same access order
-        suptitle (str, optional):
-            Title surmounting the spectrum and the image display \\
-            Defaults to ""
-        color (str, optional):
-            Color of the spectrum line \\
-            Defaults to 'k' (for black)
-        cmap (str, optional):
-            Color map of the image cells \\
-            Defaults to 'binary' (for white and black)
+            The spectral axis entry must be the ultimate one
+        b_axis_name (str):
+            Name of the brightness axis as extracted in the data header
+        b_axis_unit (str):
+            Unit of the brightness axis as extracted in the data header
+        title (str):
+            Title surmounting the spectrum and the image \\
+            It also names the matplotlib window
+        color (str):
+            Color of the spectrum line
+        cmap (str):
+            Color map of the image
     """
     
-    # Alert message for too large number of dimension
-    if param.print_verbose and dematricized_data.ndim > 3:
-        alert_message = "Too large number of dimension for image display:"
-        alert_message += "Truncation at the first two axes (excluding the spectral axis)"
-        print("\x1B[33m" + '\n' + alert_message + '\n' + "\x1B[0m")
+    fullscreen(title)
 
-    # Spectrum grid construction
-    # (averaging along correlated non-z axes)
-    non_z_grid_axes = list(range(len(world_grids[-1][0])))
-    del non_z_grid_axes[world_grids[-1][0].index(len(world_grids)-1)]
-    z_grid = np.mean(world_grids[-1][1].T, axis = tuple(non_z_grid_axes))
-    # Image grid construction
-    # (averaging along correlated non-x and non-y axes)
-    non_x_grid_axes = list(range(len(world_grids[0][0])))
-    del non_x_grid_axes[world_grids[0][0].index(0)]
-    x_grid = np.mean(world_grids[0][1].T, axis = tuple(non_x_grid_axes))
-    non_y_grid_axes = list(range(len(world_grids[1][0])))
-    del non_y_grid_axes[world_grids[1][0].index(1)]
-    y_grid = np.mean(world_grids[1][1].T, axis = tuple(non_y_grid_axes))
+    plt.subplot(121)
 
-    # Copy of `dematricized_data` to avoid overwriting it
-    to_plot, to_show = dematricized_data.copy(), dematricized_data.copy()
-    # Masking, filtering and hindering for spectra plots
-    to_plot = masking_tool(to_plot, axis_names, world_grids, param.spectra_masker)
-    to_plot = filtering_tool(to_plot, axis_names, world_grids, param.spectra_filter)
-    to_plot = hindering_tool(to_plot, axis_names, world_grids, param.spectra_hinder)
-    # Masking, filtering and hindering for images shows
-    to_show = masking_tool(to_show, axis_names, world_grids, param.images_masker)
-    to_show = filtering_tool(to_show, axis_names, world_grids, param.images_filter)
-    to_show = hindering_tool(to_show, axis_names, world_grids, param.images_hinder)
-    # Separate processing for spectra to plot and images to show
-    dematricized_data_to_plot, dematricized_data_to_show = to_plot, to_show
+    to_plot = data_tensor
 
-    # Spectra construction
-    non_z_axes = tuple(axis for axis in range(dematricized_data.ndim -1))
-    z_nan = np.all(np.isnan(dematricized_data_to_plot), axis = non_z_axes)
-    dematricized_data_to_plot[..., z_nan] = 0 # To avoid 'nanmean' warnings
-    plot_spectrum = np.nanmean(dematricized_data_to_plot, axis = non_z_axes)
-    plot_spectrum[z_nan] = np.nan # Erasure of fully 'NaN' sheets
-    # Images construction
-    non_xy_axes = tuple(axis for axis in range(2, dematricized_data.ndim))
-    xy_nan = np.all(np.isnan(dematricized_data_to_show), axis = non_xy_axes)
-    dematricized_data_to_show[xy_nan, ...] = 0 # To avoid 'nanmean' warnings
-    pcolor_image = np.nanmean(dematricized_data_to_show, axis = non_xy_axes)
-    pcolor_image[xy_nan] = np.nan # Erasure of fully 'NaN' spaxels
+    to_plot = masking(to_plot, world_grids, axis_names, param.spectra_masker)
+    to_plot = filtering(to_plot, world_grids, axis_names, param.spectra_filter)
+    to_plot = hindering(to_plot, world_grids, axis_names, param.spectra_hinder)
 
-    # Figure configuration
-    plt.figure("Dematricized show")
-    plt.suptitle(suptitle, fontsize = 24)
-    # Fullscreen (depending on the graphics engine - backend - used by matplotlib)
+    non_spectra_axes = tuple(axis for axis in range(to_plot.ndim - 1))
+    spectra_nan = np.all(np.isnan(to_plot), axis = non_spectra_axes)
+    to_plot[..., spectra_nan] = 0 # To avoid any 'nanmean' warnings
+    mean_spectrum = np.nanmean(to_plot, axis = non_spectra_axes)
+    mean_spectrum[spectra_nan] = np.nan # 'NaN' images erasure
+
+    plt.plot(spectra_grid[0], mean_spectrum, color = color, linewidth = 3)
+    
+    if spectra_grid[0][0] > spectra_grid[0][-1]: plt.gca().invert_xaxis()
+
+    spectrum_show(axis_names, axis_units, b_axis_name, b_axis_unit)
+
+    plt.subplot(122)
+
+    to_pcolormesh = data_tensor
+
+    to_pcolormesh = masking(to_pcolormesh, world_grids, axis_names, param.images_masker)
+    to_pcolormesh = filtering(to_pcolormesh, world_grids, axis_names, param.images_filter)
+    to_pcolormesh = hindering(to_pcolormesh, world_grids, axis_names, param.images_hinder)
+
+    non_images_axes = tuple(axis for axis in range(2, to_pcolormesh.ndim))
+    images_nan = np.all(np.isnan(to_pcolormesh), axis = non_images_axes)
+    to_pcolormesh[images_nan, ...] = 0 # To avoid any nanmean warnings
+    mean_image = np.nanmean(to_pcolormesh, axis = non_images_axes)
+    mean_image[images_nan] = np.nan # 'NaN' spectra erasure 
+    
+    warnings.filterwarnings("ignore", # For grids nearly constant along some axes
+    message = "The input coordinates to pcolormesh are interpreted as cell centers")
+
+    plt.pcolormesh(images_grid[0], images_grid[1], mean_image, cmap = cmap, vmin = 0)
+
+    if images_grid[0][0][0] > images_grid[0][0][-1]: plt.gca().invert_xaxis()
+    if images_grid[1][0][0] > images_grid[1][0][-1]: plt.gca().invert_yaxis()
+    
+    image_show(axis_names, axis_units, b_axis_name, b_axis_unit)
+
+    plt.show()
+
+def spectrum_show(axis_names: list[str], axis_units: list[str],
+                  b_axis_name: str, b_axis_unit: str):
+    """ Spectrum labeling with names and units
+    ---
+
+    Label a spectrum with names and units as extracted in the data header \\
+    (brightness unit is converted to 'unicode' format)
+
+    Args:
+        axis_names (list[str]):
+            Names of the different axes as extracted in the data header \\
+            The spectral axis entry must be the ultimate one
+        axis_units (list[str]):
+            Units of the different axes as extracted in the data header \\
+            The spectral axis entry must be the ultimate one
+        b_axis_name (str):
+            Name of the brightness axis as extracted in the data header
+        b_axis_unit (str):
+            Unit of the brightness axis as extracted in the data header
+    """
+
+    x_axis_name = axis_names[-1]
+    if x_axis_name in param.zooms_units.keys():
+        x_axis_unit = param.zooms_units[x_axis_name]
+    else: x_axis_unit = axis_units[-1]
+    
+    plt.xlabel(f"{x_axis_name} ({x_axis_unit})", fontsize = 18)
+    plt.ylabel(f"{b_axis_name} ({b_axis_unit})", fontsize = 18)
+
+    plt.xticks(fontsize = 12)
+    plt.yticks(fontsize = 12)
+
+def image_show(axis_names: list[str], axis_units: list[str],
+                  b_axis_name: str, b_axis_unit: str):
+    """ Image labeling with names and units
+    ---
+
+    Label an image with names and units as extracted in the data header \\
+    (brightness unit is converted to 'unicode' format)
+
+    **Note:** This also adds a small colorbar labeling the brightness
+
+    Args:
+        axis_names (list[str]):
+            Names of the different axes as extracted in the data header \\
+            The spectral axis entry must be the ultimate one
+        axis_units (list[str]):
+            Units of the different axes as extracted in the data header \\
+            The spectral axis entry must be the ultimate one
+        b_axis_name (str):
+            Name of the brightness axis as extracted in the data header
+        b_axis_unit (str):
+            Unit of the brightness axis as extracted in the data header
+    """
+
+    x_axis_name = axis_names[0]
+    if x_axis_name in param.zooms_units.keys():
+        x_axis_unit = param.zooms_units[x_axis_name]
+    else: x_axis_unit = axis_units[0]
+    y_axis_name = axis_names[1]
+    if y_axis_name in param.zooms_units.keys():
+        y_axis_unit = param.zooms_units[y_axis_name]
+    else: y_axis_unit = axis_units[1]
+    
+    plt.xlabel(f"{x_axis_name} ({x_axis_unit})", fontsize = 18)
+    plt.ylabel(f"{y_axis_name} ({y_axis_unit})", fontsize = 18)
+
+    plt.xticks(fontsize = 12)
+    plt.yticks(fontsize = 12)
+
+    cbar = plt.colorbar(fraction = 0.025, aspect = 50) # Small colorbar labeling the brightness
+    cbar.set_label(f"{b_axis_name} ({b_axis_unit})", fontsize = 18, rotation = 270, labelpad = 36)
+
+def fullscreen(title: str):
+    """ Fullscreen figure initialization
+    ---
+
+    Fullscreen depending on the graphics engine / backend used by matplotlib
+
+    **Note:** If fullscreen is impossible, the figure is just initialized in the usual way
+
+    Args:
+        title (str):
+            Title of the figure
+    """
+    
+    plt.figure(title)
+    plt.suptitle(title, fontsize = 24)
+    
     manager, backend = plt.get_current_fig_manager(), plt.get_backend().lower()
+
     try:
+
         if 'gtk' in backend: manager.window.maximize()
         elif 'wx' in backend: manager.frame.Maximize(True)
         elif 'qt' in backend: manager.window.showMaximized()
@@ -821,60 +981,51 @@ def show_dematricized(dematricized_data: float_arr_type,
             match os.uname().sysname: # Linux or macOS ('Darwin')
                 case 'Linux': manager.window.attributes('-zoomed', True)
                 case 'Darwin': manager.window.attributes('-fullscreen', True)
+
     except Exception: pass
 
-    # World axes labels determination
-    plot_xlabel_name = axis_names[-1]
-    plot_xlabel_unit = axis_units[-1]
-    if plot_xlabel_name in param.zooms_units.keys():
-        plot_xlabel_unit = param.zooms_units[plot_xlabel_name]
-    show_xlabel_name = axis_names[0]
-    show_xlabel_unit = axis_units[0]
-    if show_xlabel_name in param.zooms_units.keys():
-        show_xlabel_unit = param.zooms_units[show_xlabel_name]
-    show_ylabel_name = axis_names[1]
-    show_ylabel_unit = axis_units[1]
-    if show_ylabel_name in param.zooms_units.keys():
-        show_ylabel_unit = param.zooms_units[show_ylabel_name]
-    
-    # Pixels axis labels determination
-    try: pixels_axis_unit = Unit(pixels_axis_unit).to_string(format = "unicode")
-    except ValueError: pass # An unrecognized unit (as "without unit") is left as is
-
-    # Colorbar saturation
-    if not np.all(np.isnan(pcolor_image)):
-        xy_anomalies_sigmas = [0,0]
-        if show_xlabel_name in param.anomalies_sigmas.keys():
-            xy_anomalies_sigmas[0] = param.anomalies_sigmas[show_xlabel_name]
-        if show_ylabel_name in param.anomalies_sigmas.keys():
-            xy_anomalies_sigmas[1] = param.anomalies_sigmas[show_ylabel_name]
-        if xy_anomalies_sigmas[0] or xy_anomalies_sigmas[1]:
-            vmax = np.nanmean(pcolor_image) + max(xy_anomalies_sigmas)*np.nanstd(pcolor_image)
-        else: vmax = np.nanmax(pcolor_image)
-    else: vmax = None
-
-    # Spectrum to plot
-    plt.subplot(1, 2, 1)
-    plt.xticks(fontsize = 12)
-    plt.yticks(fontsize = 12)
-    if z_grid[0] > z_grid[-1]: plt.gca().invert_xaxis()
-    plt.plot(z_grid, plot_spectrum, linewidth = 3, color = color)
-    plt.xlabel(f"{plot_xlabel_name} ({plot_xlabel_unit})", fontsize = 18)
-    plt.ylabel(f"{pixels_axis_name} ({pixels_axis_unit})", fontsize = 18)
-    # Image to show
-    plt.subplot(1, 2, 2)
-    plt.xticks(fontsize = 12)
-    plt.yticks(fontsize = 12)
-    if x_grid[0] > x_grid[-1]: plt.gca().invert_xaxis()
-    if y_grid[0] > y_grid[-1]: plt.gca().invert_yaxis()
-    plt.xlabel(f"{show_xlabel_name} ({show_xlabel_unit})", fontsize = 18)
-    plt.ylabel(f"{show_ylabel_name} ({show_ylabel_unit})", fontsize = 18)
-    plt.pcolor(x_grid, y_grid, pcolor_image.T, vmin = 0, vmax = vmax, cmap = cmap)
-    clrbar = plt.colorbar(fraction = 0.025, aspect = 50)
-    clrbar_label = f"{pixels_axis_name} ({pixels_axis_unit})"
-    clrbar.set_label(clrbar_label, fontsize = 18, rotation = 270, labelpad = 36)
-
-    # Figure show
-    plt.show()
-
 ###################################################################################################
+
+def joint_grid(grid_axes: list[int], world_grids: w_grids_type) -> tensor_type:
+    """ Builds the joint grid of given axes
+    ---
+
+    Build the joint grid of the world (physical) values along the different given axes \\
+    (the dimension of the returned grid is equal to the number of element of `grid_axes`)
+
+    For example, `world_grids = [([0,1], x_grid_xy), ([0,1], y_grid_xy), ([2], z_grid_z)]` \\
+    leads to `[x_grid_xy, y_grid_xy]` with `grid_axes = [0,1]` \\
+    and to `[z_grid_z]` with `grid_axes = [2]`
+
+    Args:
+        grid_axes (list[int]):
+            List of axes from which to construct the joint grid \\
+            (-1 corresponds to the ultimate, -2 to the panultimate, ...)
+        world_grids (list[tuple[list[int], np.typing.NDArray[np.float64]]]):
+            Grids of the world (physical) values along each of the different axis, \\
+            grouped by correlated axes so that each tuple contains a list of axis indexes \\
+            followed by the joint grid of the corresponding axes, in the same axis access order
+
+    Returns:
+        joint_grid (np.typing.NDArray[np.float64]):
+            Joint grid of the world (physical) values along each of the given axes
+    """
+    
+    grid_axes = [axis if axis >= 0 else len(world_grids) + axis for axis in grid_axes]
+
+    joint_grid = []
+
+    for grid_axis in grid_axes:
+
+        corr_axes, corr_grid = world_grids[grid_axis]
+
+        non_grid_axes = [index for index, axis in enumerate(corr_axes) if axis not in grid_axes]
+        axis_length = lambda axis: world_grids[axis][1].shape[world_grids[axis][0].index(axis)]
+        expansion = tuple(1 if axis in corr_axes else axis_length(axis) for axis in grid_axes)
+        
+        axis_grid = np.mean(corr_grid.T, axis = tuple(non_grid_axes))
+        expanded_axis_grid = np.tile(axis_grid, expansion)
+
+        joint_grid.append(expanded_axis_grid)
+
+    return joint_grid
