@@ -22,12 +22,12 @@ Each repository of this project only consists in 4 files:
 - `process.py` is a processing file, it contains algorithms, estimators, tools and display functions.
 - `param.py` is the file to modify, it contains inputs, outputs, zoom, estimation, and monitoring options.
 - `main.py` is the file to execute, it reads the contents of the inputs files and prepare their further treatment.
-- `app.py` is an appendix file, it reads the contents of the outputs folders and show a few more advanced results.
+- `add.py` is an additional file, it reads the contents of the outputs folders and show a few more advanced results.
 
 The `process.py` file is designed to be specific to the *method*.  
 The `param.py` file is designed to be specific to the *account*.  
 The `main.py` file is designed to be specific to the *project*.  
-The `app.py` file is designed to be specific to the *results*.
+The `add.py` file is designed to be specific to the *results*.
 
 ### Documentation
 
@@ -361,12 +361,13 @@ on either side of the center would be selected.
 > 
 > }
 
-Importantly, it is necessary to leave the custom units for all t he parameters that follow this time  
+Importantly, it is necessary to leave the custom units for all the parameters that follow this time  
 (if the entered unit is not supported, then the list of available units will automatically display).
 
 ---
 
-Upcoming...
+It is best not to use pixels outside the adaptive optics correction radius, for example.
+The choice of the *psf_degree* parameter is a trade-off between the complexity of the chromatic PSF and the correlation distance of the noise.
 
 ---
 
